@@ -201,8 +201,6 @@ public class CaptionsManager extends ListenerAdapter {
                     username = member.getNickname();
                 }
 
-                logger.info("[DEBUG] Processing audio chunk for {}: {} packets", username, packets.size());
-
                 // VAD Filtering
                 VadStats stats = calculateVad(packets);
                 if (!stats.isSpeech) {
@@ -213,15 +211,11 @@ public class CaptionsManager extends ListenerAdapter {
 
                 // Wrap in OGG
                 byte[] oggData = OggOpusWriter.write(packets);
-                logger.info("[DEBUG] Generated Ogg data: {} bytes for {}", oggData.length, username);
                 
                 String lastText = session.lastUserText.get(userId);
-                logger.info("[DEBUG] Calling Groq with prompt length {}", lastText != null ? lastText.length() : 0);
                 GroqClient.GroqResult result = groq.translateAudio(oggData, "audio.ogg", lastText);
                 
                 String text = result.text.trim();
-                logger.info("[DEBUG] Groq result for {}: '{}'", username, text);
-                logger.info("[DEBUG] Segment stats for {}: {}", username, result.debugStr);
                 
                 if (text.isEmpty()) {
                     logger.info("[DEBUG] Groq returned empty text for {}", username);
