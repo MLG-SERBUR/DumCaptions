@@ -80,17 +80,16 @@ public class GroqClient {
                 .addHeader("Authorization", "Bearer " + apiKey)
                 .build();
 
-        logger.info("[DEBUG] Sending {} bytes to Groq API ({})", audioData.length, API_URL);
+        logger.info("Sending {} bytes to Groq API ({})", audioData.length, API_URL);
 
         try (Response response = httpClient.newCall(request).execute()) {
             if (!response.isSuccessful()) {
                 String errorBody = response.body() != null ? response.body().string() : "No body";
-                logger.error("[DEBUG] Groq API Request failed for model {}. Code: {}, Body: {}", model, response.code(), errorBody);
+                logger.error("Groq API Request failed for model {}. Code: {}, Body: {}", model, response.code(), errorBody);
                 throw new IOException("Groq API error: " + response.code() + " - " + errorBody);
             }
 
             GroqVerboseResponse result = objectMapper.readValue(response.body().byteStream(), GroqVerboseResponse.class);
-            logger.info("[DEBUG] Groq API returned successfully with text of length {}", result.text != null ? result.text.length() : 0);
             return processSegments(result);
         }
     }

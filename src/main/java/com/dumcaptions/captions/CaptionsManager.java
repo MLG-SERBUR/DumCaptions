@@ -204,7 +204,7 @@ public class CaptionsManager extends ListenerAdapter {
                 // VAD Filtering
                 VadStats stats = calculateVad(packets);
                 if (!stats.isSpeech) {
-                    logger.info("[DEBUG] Dropped buffer for user {}: mostly silence/noise ({}/{} speech frames)", 
+                    logger.info("Dropped buffer for user {}: mostly silence/noise ({}/{} speech frames)", 
                         username, stats.speechFrames, stats.totalFrames);
                     return;
                 }
@@ -218,7 +218,6 @@ public class CaptionsManager extends ListenerAdapter {
                 String text = result.text.trim();
                 
                 if (text.isEmpty()) {
-                    logger.info("[DEBUG] Groq returned empty text for {}", username);
                     return;
                 }
 
@@ -282,11 +281,10 @@ public class CaptionsManager extends ListenerAdapter {
             MessageChannel channel = jda.getChannelById(MessageChannel.class, session.textChannelId);
             if (channel != null) {
                 channel.editMessageEmbedsById(session.embedMsgId, eb.build()).queue(
-                    success -> logger.info("[DEBUG] Updated captions embed for {}", username),
                     err -> logger.error("Failed to edit captions message for {}: {}", username, err.getMessage())
                 );
             } else {
-                logger.error("[DEBUG] Failed to resolution channel ID {} as MessageChannel", session.textChannelId);
+                logger.error("Failed to resolution channel ID {} as MessageChannel", session.textChannelId);
             }
         }
     }
