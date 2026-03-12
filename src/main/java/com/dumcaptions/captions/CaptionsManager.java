@@ -221,6 +221,7 @@ public class CaptionsManager extends ListenerAdapter {
                 
                 String text = result.text.trim();
                 logger.info("[DEBUG] Groq result for {}: '{}'", username, text);
+                logger.info("[DEBUG] Segment stats for {}: {}", username, result.debugStr);
                 
                 if (text.isEmpty()) {
                     logger.info("[DEBUG] Groq returned empty text for {}", username);

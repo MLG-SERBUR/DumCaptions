@@ -106,20 +106,20 @@ public class GroqClient {
 
                 // Rule A: High no_speech probability
                 if (seg.noSpeechProb > 0.2) {
-                    logger.debug("high no_speech_prob: '{}' (no_speech_prob={})", seg.text, seg.noSpeechProb);
+                    logger.info("high no_speech_prob: '{}' (no_speech_prob={})", seg.text, seg.noSpeechProb);
                     continue;
                 }
 
                 // Rule B: High compression ratio (hallucination loops)
                 if (seg.compressionRatio > 2.0) {
-                    logger.debug("high compression_ratio: '{}' (compression_ratio={})", seg.text, seg.compressionRatio);
+                    logger.info("high compression_ratio: '{}' (compression_ratio={})", seg.text, seg.compressionRatio);
                     continue;
                 }
 
                 // Rule C: Hallucination filter
                 String cleanedText = filterHallucinations(seg.text);
                 if (cleanedText == null || cleanedText.isEmpty()) {
-                    logger.debug("Blacklisted text: '{}'", seg.text);
+                    logger.info("Blacklisted text: '{}'", seg.text);
                     continue;
                 }
 
@@ -140,7 +140,7 @@ public class GroqClient {
 
                     if (minDuration > 0 && overlapDuration >= 0.5 * minDuration) {
                         if (seg.text.trim().length() > lastSeg.text.trim().length()) {
-                            logger.debug("Overlapping segments. Replacing '{}' with '{}'", lastSeg.text, seg.text);
+                            logger.info("Overlapping segments. Replacing '{}' with '{}'", lastSeg.text, seg.text);
                             validSegments.set(validSegments.size() - 1, seg);
                         }
                     } else {
