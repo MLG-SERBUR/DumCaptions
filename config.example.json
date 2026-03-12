@@ -1,0 +1,6 @@
+{
+    "discord_token": "YOUR_DISCORD_BOT_TOKEN",
+    "groq_api_key": "YOUR_GROQ_API_KEY",
+    "stt_model": "whisper-large-v3",
+    "captions_enabled": true
+}

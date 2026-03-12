@@ -1,0 +1,35 @@
+package com.dumcaptions.captions;
+
+import java.util.concurrent.TimeUnit;
+
+/**
+ * Centralized configuration for captions logic.
+ * These values can be hardcoded here for easy modification of the logic later.
+ */
+public class CaptionsConfig {
+    
+    // Rate limit between Groq API requests (per user)
+    public static final long RATE_LIMIT_INTERVAL_MS = 3000;
+    
+    // Audio processing thresholds
+    public static final long STALE_DATA_THRESHOLD_MS = 6000;    // Forced process after 6s silence
+    public static final long NATURAL_SILENCE_THRESHOLD_MS = 1000; // Natural break after 1s silence
+    public static final long HARD_CUTOFF_THRESHOLD_MS = 30000;   // Maximum length of 30s
+    
+    // TEN-VAD parameters
+    public static final int VAD_FRAME_SIZE = 960;               // 20ms at 48kHz
+    public static final float VAD_THRESHOLD = 0.5f;
+    public static final double MIN_SPEECH_PERCENTAGE = 0.05;    // Drop if < 5% speech
+    
+    // Overlap management
+    public static final int OVERLAP_PACKETS = 100;              // 2 seconds (100 * 20ms)
+    
+    // Hallucination filter strings
+    public static final String[] HALLUCINATION_BLACKSET = {
+        "thank you", "thanks", "bye", "goodbye", "thanks for watching",
+        "thank you for watching", "please subscribe", "subscribe",
+        "subscribe to the channel", "thank you very much", "thanks guys",
+        "i'll see you in the next one", "if you'd like to subscribe",
+        "subtitles by the amara.org community", "i'm sorry"
+    };
+}
