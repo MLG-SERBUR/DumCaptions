@@ -273,7 +273,7 @@ public class CaptionsManager extends ListenerAdapter {
                 
                 if (text.isEmpty()) {
                     // API Incremeting logic
-                    float newThreshold = Math.min(0.4f, vadThreshold + CaptionsConfig.VAD_STEP_UP);
+                    float newThreshold = Math.min(CaptionsConfig.VAD_MAX_THRESHOLD, vadThreshold + CaptionsConfig.VAD_STEP_UP);
                     if (newThreshold != vadThreshold) {
                         session.userVadThresholds.put(userId, newThreshold);
                         logger.info("Increased VAD threshold for user {} to {} due to API feedback", displayName, String.format("%.2f", newThreshold));
