@@ -102,7 +102,7 @@ public class GroqClient {
                 .addHeader("Authorization", "Bearer " + apiKey)
                 .build();
 
-        logger.info("[{}] Sending {} bytes to Groq API ({}, vad_threshold={})", userIdentifier, audioData.length, targetUrl, String.format("%.2f", vadThreshold));
+        logger.info("[{}] {} bytes ({}, vad_threshold={})", userIdentifier, audioData.length, targetUrl, String.format("%.2f", vadThreshold));
 
         try (Response response = httpClient.newCall(request).execute()) {
             if (!response.isSuccessful()) {

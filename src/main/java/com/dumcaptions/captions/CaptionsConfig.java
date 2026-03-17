@@ -18,7 +18,7 @@ public class CaptionsConfig {
     
     // TEN-VAD parameters
     public static final int VAD_FRAME_SIZE = 960;               // 20ms at 48kHz
-    public static final float VAD_THRESHOLD = 0.4f;
+    public static final float VAD_THRESHOLD = 0.5f;
     public static final double MIN_SPEECH_PERCENTAGE = 0.05;    // Drop if < 5% speech
     
     // Overlap management
