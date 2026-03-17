@@ -147,7 +147,10 @@ public class CaptionsManager extends ListenerAdapter {
                 )
                 .build();
 
-        event.getChannel().sendMessageEmbeds(eb.build()).setComponents(ActionRow.of(menu)).queue(msg -> {
+        event.getChannel().sendMessageEmbeds(eb.build())
+                .setComponents(ActionRow.of(menu))
+                .setSuppressedNotifications(true)
+                .queue(msg -> {
             session.embedMsgId = msg.getId();
             event.getHook().editOriginal("Captions enabled. I've joined " + vc.getName()).queue();
         });
@@ -340,7 +343,7 @@ public class CaptionsManager extends ListenerAdapter {
         synchronized (session.userLogs) {
             String line = String.format("**%s**: %s", displayName, text);
             session.userLogs.add(line);
-            if (session.userLogs.size() > 15) {
+            while (session.userLogs.size() > 10) {
                 session.userLogs.remove(0);
             }
             
@@ -358,10 +361,22 @@ public class CaptionsManager extends ListenerAdapter {
 
             MessageChannel channel = jda.getChannelById(MessageChannel.class, session.textChannelId);
             if (channel != null) {
-                channel.editMessageEmbedsById(session.embedMsgId, eb.build()).queue(
-                    null,
-                    err -> logger.error("Failed to edit captions message for {}: {}", displayName, err.getMessage())
-                );
+                channel.getHistoryAfter(session.embedMsgId, 6).queue(history -> {
+                    if (history.getRetrievedHistory().size() > 5) {
+                        channel.deleteMessageById(session.embedMsgId).queue(null, err -> {});
+                        channel.sendMessageEmbeds(eb.build())
+                                .setSuppressedNotifications(true)
+                                .queue(
+                                    msg -> session.embedMsgId = msg.getId(),
+                                    err -> logger.error("Failed to send new captions message for {}: {}", displayName, err.getMessage())
+                                );
+                    } else {
+                        channel.editMessageEmbedsById(session.embedMsgId, eb.build()).queue(
+                            null,
+                            err -> logger.error("Failed to edit captions message for {}: {}", displayName, err.getMessage())
+                        );
+                    }
+                }, err -> logger.error("Failed to fetch message history: {}", err.getMessage()));
             } else {
                 logger.error("Failed to resolve channel ID {} as MessageChannel", session.textChannelId);
             }
