@@ -236,7 +236,7 @@ public class CaptionsManager extends ListenerAdapter {
                 }
 
                 // VAD Filtering
-                float vadThreshold = session.userVadThresholds.getOrDefault(userId, CaptionsConfig.VAD_THRESHOLD);
+                float vadThreshold = session.userVadThresholds.getOrDefault(userId, CaptionsConfig.VAD_MAX_THRESHOLD);
                 VadStats stats = calculateVad(packets, vadThreshold);
                 
                 if (!stats.isSpeech) {
@@ -250,7 +250,7 @@ public class CaptionsManager extends ListenerAdapter {
                             session.userVadDroppedSequential.put(userId, drops);
                             
                             if (drops >= 3) {
-                                float newThreshold = Math.max(0.1f, vadThreshold - 0.1f);
+                                float newThreshold = Math.max(CaptionsConfig.VAD_MIN_THRESHOLD, vadThreshold - CaptionsConfig.VAD_STEP_DOWN);
                                 session.userVadThresholds.put(userId, newThreshold);
                                 session.userVadDroppedSequential.put(userId, 0);
                                 logger.info("Lowered VAD threshold for new user {} to {}", displayName, String.format("%.2f", newThreshold));
@@ -273,7 +273,7 @@ public class CaptionsManager extends ListenerAdapter {
                 
                 if (text.isEmpty()) {
                     // API Incremeting logic
-                    float newThreshold = Math.min(0.4f, vadThreshold + 0.05f);
+                    float newThreshold = Math.min(0.4f, vadThreshold + CaptionsConfig.VAD_STEP_UP);
                     if (newThreshold != vadThreshold) {
                         session.userVadThresholds.put(userId, newThreshold);
                         logger.info("Increased VAD threshold for user {} to {} due to API feedback", displayName, String.format("%.2f", newThreshold));
@@ -364,7 +364,7 @@ public class CaptionsManager extends ListenerAdapter {
         if (totalValidFrames == 0) return new VadStats(false, 0, 0, 0);
         
         // Dynamically adjust threshold based on volume
-        float dynamicThreshold = CaptionsConfig.VAD_THRESHOLD;
+        float dynamicThreshold = CaptionsConfig.VAD_MAX_THRESHOLD;
         if (maxAmplitude < 300) {
             dynamicThreshold = 0.1f;
         } else if (maxAmplitude < 1000) {
