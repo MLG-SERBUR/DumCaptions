@@ -26,7 +26,7 @@ public class CaptionsConfig {
     
     // Hallucination filter strings
     public static final String[] HALLUCINATION_BLACKSET = {
-        "thank you", "thanks", "bye", "goodbye", "thanks for watching",
+        "thank you", "thanks", "bye", "you", "okay", "goodbye", "thanks for watching",
         "thank you for watching", "please subscribe", "subscribe",
         "subscribe to the channel", "thank you very much", "thanks guys",
         "i'll see you in the next one", "if you'd like to subscribe",

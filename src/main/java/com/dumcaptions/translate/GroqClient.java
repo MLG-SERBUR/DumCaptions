@@ -44,7 +44,7 @@ public class GroqClient {
         }
     }
 
-    public GroqResult translateAudio(byte[] audioData, String filename, String prompt, String mode, String userIdentifier) throws IOException {
+    public GroqResult translateAudio(byte[] audioData, String filename, String prompt, String mode, String userIdentifier, float vadThreshold) throws IOException {
         // --- RATE LIMITER ---
         long now = System.currentTimeMillis();
         long elapsed = now - lastReqTime.get();
@@ -102,7 +102,7 @@ public class GroqClient {
                 .addHeader("Authorization", "Bearer " + apiKey)
                 .build();
 
-        logger.info("[{}] Sending {} bytes to Groq API ({})", userIdentifier, audioData.length, targetUrl);
+        logger.info("[{}] Sending {} bytes to Groq API ({}, vad_threshold={})", userIdentifier, audioData.length, targetUrl, String.format("%.2f", vadThreshold));
 
         try (Response response = httpClient.newCall(request).execute()) {
             if (!response.isSuccessful()) {

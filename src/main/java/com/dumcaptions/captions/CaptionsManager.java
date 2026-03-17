@@ -60,6 +60,9 @@ public class CaptionsManager extends ListenerAdapter {
         public final Map<Long, AudioBuffer> userAudio = new ConcurrentHashMap<>();
         public final Map<Long, String> lastUserText = new ConcurrentHashMap<>();
         public final List<String> userLogs = new ArrayList<>();
+        public final Map<Long, Float> userVadThresholds = new ConcurrentHashMap<>();
+        public final Map<Long, Integer> userVadDroppedSequential = new ConcurrentHashMap<>();
+        public final Map<Long, Boolean> userHasPassedVad = new ConcurrentHashMap<>();
         public String embedMsgId;
         public String captionMode = "english";
 
@@ -233,22 +236,48 @@ public class CaptionsManager extends ListenerAdapter {
                 }
 
                 // VAD Filtering
-                VadStats stats = calculateVad(packets);
+                float vadThreshold = session.userVadThresholds.getOrDefault(userId, CaptionsConfig.VAD_THRESHOLD);
+                VadStats stats = calculateVad(packets, vadThreshold);
+                
                 if (!stats.isSpeech) {
-                    logger.info("Dropped buffer for user {}: mostly silence/noise ({}/{} speech frames)", 
-                        displayName, stats.speechFrames, stats.totalFrames);
+                    logger.info("Dropped buffer for user {}: mostly silence/noise ({}/{} speech frames, peakAmp={}, vad_threshold={})", 
+                        displayName, stats.speechFrames, stats.totalFrames, stats.maxAmplitude, String.format("%.2f", vadThreshold));
+                        
+                    // VAD Lowering Logic
+                    if (stats.maxAmplitude > 500 || packets.size() > 50) {
+                        if (!session.userHasPassedVad.getOrDefault(userId, false)) {
+                            int drops = session.userVadDroppedSequential.getOrDefault(userId, 0) + 1;
+                            session.userVadDroppedSequential.put(userId, drops);
+                            
+                            if (drops >= 3) {
+                                float newThreshold = Math.max(0.1f, vadThreshold - 0.1f);
+                                session.userVadThresholds.put(userId, newThreshold);
+                                session.userVadDroppedSequential.put(userId, 0);
+                                logger.info("Lowered VAD threshold for new user {} to {}", displayName, String.format("%.2f", newThreshold));
+                            }
+                        }
+                    }
                     return;
                 }
+                
+                // Passed VAD
+                session.userHasPassedVad.put(userId, true);
 
                 // Wrap in OGG
                 byte[] oggData = OggOpusWriter.write(packets);
                 
                 String lastText = session.lastUserText.get(userId);
-                GroqClient.GroqResult result = groq.translateAudio(oggData, "audio.ogg", lastText, session.captionMode, displayName);
+                GroqClient.GroqResult result = groq.translateAudio(oggData, "audio.ogg", lastText, session.captionMode, displayName, vadThreshold);
                 
                 String text = result.text.trim();
                 
                 if (text.isEmpty()) {
+                    // API Incremeting logic
+                    float newThreshold = Math.min(0.4f, vadThreshold + 0.05f);
+                    if (newThreshold != vadThreshold) {
+                        session.userVadThresholds.put(userId, newThreshold);
+                        logger.info("Increased VAD threshold for user {} to {} due to API feedback", displayName, String.format("%.2f", newThreshold));
+                    }
                     return;
                 }
 
@@ -265,15 +294,17 @@ public class CaptionsManager extends ListenerAdapter {
         public final boolean isSpeech;
         public final int speechFrames;
         public final int totalFrames;
+        public final int maxAmplitude;
 
-        public VadStats(boolean isSpeech, int speechFrames, int totalFrames) {
+        public VadStats(boolean isSpeech, int speechFrames, int totalFrames, int maxAmplitude) {
             this.isSpeech = isSpeech;
             this.speechFrames = speechFrames;
             this.totalFrames = totalFrames;
+            this.maxAmplitude = maxAmplitude;
         }
     }
 
-    private VadStats calculateVad(List<byte[]> packets) throws Exception {
+    private VadStats calculateVad(List<byte[]> packets, float vadThreshold) throws Exception {
         List<short[]> decodedFrames = new ArrayList<>();
         int maxAmplitude = 0;
         int totalValidFrames = 0;
@@ -330,7 +361,7 @@ public class CaptionsManager extends ListenerAdapter {
             }
         }
         
-        if (totalValidFrames == 0) return new VadStats(false, 0, 0);
+        if (totalValidFrames == 0) return new VadStats(false, 0, 0, 0);
         
         // Dynamically adjust threshold based on volume
         float dynamicThreshold = CaptionsConfig.VAD_THRESHOLD;
@@ -351,7 +382,7 @@ public class CaptionsManager extends ListenerAdapter {
         }
         
         boolean isSpeech = (double) speechFrames / totalValidFrames >= CaptionsConfig.MIN_SPEECH_PERCENTAGE;
-        return new VadStats(isSpeech, speechFrames, totalValidFrames);
+        return new VadStats(isSpeech, speechFrames, totalValidFrames, maxAmplitude);
     }
 
     private void addCaption(VoiceSession session, String displayName, String text, String debugStr) {
