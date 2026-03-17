@@ -81,16 +81,7 @@ public class CaptionsManager extends ListenerAdapter {
             String selected = event.getValues().get(0);
             session.captionMode = selected;
 
-            StringSelectMenu menu = StringSelectMenu.create("caption_mode_" + guildId)
-                    .addOptions(
-                            SelectOption.of("Transcribe", "transcribe").withDescription("whisper-large-v3-turbo").withDefault("transcribe".equals(selected)),
-                            SelectOption.of("English", "english").withDescription("whisper-large-v3, english target").withDefault("english".equals(selected)),
-                            SelectOption.of("Korean", "korean").withDescription("whisper-large-v3, korean target").withDefault("korean".equals(selected)),
-                            SelectOption.of("Arabic", "arabic").withDescription("whisper-large-v3, arabic target").withDefault("arabic".equals(selected))
-                    )
-                    .build();
-
-            event.editComponents(ActionRow.of(menu)).queue();
+            event.editComponents(ActionRow.of(createSelectionMenu(guildId, selected))).queue();
         }
     }
 
@@ -138,17 +129,8 @@ public class CaptionsManager extends ListenerAdapter {
                 .setColor(Color.GREEN)
                 .setFooter("Powered by Groq (Large-Whisper-v3)");
 
-        StringSelectMenu menu = StringSelectMenu.create("caption_mode_" + guild.getId())
-                .addOptions(
-                        SelectOption.of("Transcribe", "transcribe").withDescription("whisper-large-v3-turbo"),
-                        SelectOption.of("English", "english").withDescription("whisper-large-v3, english target").withDefault(true),
-                        SelectOption.of("Korean", "korean").withDescription("whisper-large-v3, korean target"),
-                        SelectOption.of("Arabic", "arabic").withDescription("whisper-large-v3, arabic target")
-                )
-                .build();
-
         event.getChannel().sendMessageEmbeds(eb.build())
-                .setComponents(ActionRow.of(menu))
+                .setComponents(ActionRow.of(createSelectionMenu(guild.getId(), "english")))
                 .setSuppressedNotifications(true)
                 .queue(msg -> {
             session.embedMsgId = msg.getId();
@@ -380,6 +362,7 @@ public class CaptionsManager extends ListenerAdapter {
                     if (history.getRetrievedHistory().size() > 5) {
                         channel.deleteMessageById(session.embedMsgId).queue(null, err -> {});
                         channel.sendMessageEmbeds(eb.build())
+                                .setComponents(ActionRow.of(createSelectionMenu(session.guildId, session.captionMode)))
                                 .setSuppressedNotifications(true)
                                 .queue(
                                     msg -> session.embedMsgId = msg.getId(),
@@ -396,6 +379,17 @@ public class CaptionsManager extends ListenerAdapter {
                 logger.error("Failed to resolve channel ID {} as MessageChannel", session.textChannelId);
             }
         }
+    }
+
+    private StringSelectMenu createSelectionMenu(String guildId, String selected) {
+        return StringSelectMenu.create("caption_mode_" + guildId)
+                .addOptions(
+                        SelectOption.of("Transcribe", "transcribe").withDescription("whisper-large-v3-turbo").withDefault("transcribe".equals(selected)),
+                        SelectOption.of("English", "english").withDescription("whisper-large-v3, english target").withDefault("english".equals(selected)),
+                        SelectOption.of("Korean", "korean").withDescription("whisper-large-v3, korean target").withDefault("korean".equals(selected)),
+                        SelectOption.of("Arabic", "arabic").withDescription("whisper-large-v3, arabic target").withDefault("arabic".equals(selected))
+                )
+                .build();
     }
 
     public void registerCommands() {
