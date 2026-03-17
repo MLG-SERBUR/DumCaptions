@@ -270,70 +270,84 @@ public class CaptionsManager extends ListenerAdapter {
     }
 
     private VadStats calculateVad(List<byte[]> packets) throws Exception {
-        // Opus supports up to 60ms frames (2880 samples at 48kHz)
-        // Stereo means 2880 * 2 = 5760 shorts
-        short[] pcm = new short[5760]; 
-        int speechFrames = 0;
+        List<short[]> decodedFrames = new ArrayList<>();
+        int maxAmplitude = 0;
         int totalValidFrames = 0;
 
-        try (TenVad vad = new TenVad(CaptionsConfig.VAD_FRAME_SIZE, CaptionsConfig.VAD_THRESHOLD)) {
-            // Use 2 channels (Stereo) as Discord typically sends stereo, downmix for VAD
-            OpusDecoder decoder = new OpusDecoder(48000, 2);
-            short[] monoPcm = new short[CaptionsConfig.VAD_FRAME_SIZE];
+        OpusDecoder decoder = new OpusDecoder(48000, 2);
+        short[] pcm = new short[5760]; 
+        int errorCount = 0;
+        
+        for (int i = 0; i < packets.size(); i++) {
+            byte[] opus = packets.get(i);
             
-            int errorCount = 0;
-            for (int i = 0; i < packets.size(); i++) {
-                byte[] opus = packets.get(i);
-                
-                if (opus == null || opus.length < 5) {
-                    continue;
-                }
+            if (opus == null || opus.length < 5) {
+                continue;
+            }
 
-                try {
-                    int samplesPerChannel = decoder.decode(opus, 0, opus.length, pcm, 0, 2880, false);
-                    if (samplesPerChannel > 0) {
-                        totalValidFrames++;
-                        for (int s = 0; s < Math.min(samplesPerChannel, CaptionsConfig.VAD_FRAME_SIZE); s++) {
-                            monoPcm[s] = (short) ((pcm[s * 2] + pcm[s * 2 + 1]) / 2);
-                        }
-                        
-                        TenVad.VadResult res = vad.process(monoPcm);
-                        if (res.isSpeech) speechFrames++;
+            try {
+                int samplesPerChannel = decoder.decode(opus, 0, opus.length, pcm, 0, 2880, false);
+                if (samplesPerChannel > 0) {
+                    totalValidFrames++;
+                    short[] monoPcm = new short[CaptionsConfig.VAD_FRAME_SIZE];
+                    for (int s = 0; s < Math.min(samplesPerChannel, CaptionsConfig.VAD_FRAME_SIZE); s++) {
+                        short val = (short) ((pcm[s * 2] + pcm[s * 2 + 1]) / 2);
+                        monoPcm[s] = val;
+                        maxAmplitude = Math.max(maxAmplitude, Math.abs(val));
                     }
-                } catch (OpusException e) {
-                    errorCount++;
-                    // Only log individual packet errors if the error rate starts looking serious
-                    double errorRate = (double) errorCount / packets.size();
-                    if (errorRate > CaptionsConfig.MAX_OPUS_ERROR_PERCENTAGE || errorCount == 1) {
-                        StringBuilder hex = new StringBuilder();
-                        for (int b = 0; b < Math.min(opus.length, 8); b++) {
-                            hex.append(String.format("%02X ", opus[b]));
-                        }
-                        
-                        String tocInfo = "unknown";
-                        if (opus.length > 0) {
-                            int toc = opus[0] & 0xFF;
-                            int config = (toc >> 3) & 0x1F;
-                            int s = (toc >> 2) & 1;
-                            int c = toc & 3;
-                            tocInfo = String.format("TOC[config=%d, s=%d, c=%d]", config, s, c);
-                        }
+                    decodedFrames.add(monoPcm);
+                }
+            } catch (OpusException e) {
+                errorCount++;
+                // Only log individual packet errors if the error rate starts looking serious
+                double errorRate = (double) errorCount / packets.size();
+                if (errorRate > CaptionsConfig.MAX_OPUS_ERROR_PERCENTAGE || errorCount == 1) {
+                    StringBuilder hex = new StringBuilder();
+                    for (int b = 0; b < Math.min(opus.length, 8); b++) {
+                        hex.append(String.format("%02X ", opus[b]));
+                    }
+                    
+                    String tocInfo = "unknown";
+                    if (opus.length > 0) {
+                        int toc = opus[0] & 0xFF;
+                        int config = (toc >> 3) & 0x1F;
+                        int s = (toc >> 2) & 1;
+                        int c = toc & 3;
+                        tocInfo = String.format("TOC[config=%d, s=%d, c=%d]", config, s, c);
+                    }
 
-                        if (errorCount == 1) {
-                            logger.debug("First Opus decoder error in chunk (packet {}/{}): {}", i, packets.size(), e.getMessage());
-                        } else {
-                            logger.warn("Opus decoder error rate high ({}/{} - {}%): Last error at packet {}: {}. Hex(8): {} | {}", 
-                                errorCount, packets.size(), (int)(errorRate * 100), i, e.getMessage(), hex.toString().trim(), tocInfo);
-                        }
+                    if (errorCount == 1) {
+                        logger.debug("First Opus decoder error in chunk (packet {}/{}): {}", i, packets.size(), e.getMessage());
+                    } else {
+                        logger.warn("Opus decoder error rate high ({}/{} - {}%): Last error at packet {}: {}. Hex(8): {} | {}", 
+                            errorCount, packets.size(), (int)(errorRate * 100), i, e.getMessage(), hex.toString().trim(), tocInfo);
                     }
                 }
             }
-            
-            if (totalValidFrames == 0) return new VadStats(false, 0, 0);
-            
-            boolean isSpeech = (double) speechFrames / totalValidFrames >= CaptionsConfig.MIN_SPEECH_PERCENTAGE;
-            return new VadStats(isSpeech, speechFrames, totalValidFrames);
         }
+        
+        if (totalValidFrames == 0) return new VadStats(false, 0, 0);
+        
+        // Dynamically adjust threshold based on volume
+        float dynamicThreshold = CaptionsConfig.VAD_THRESHOLD;
+        if (maxAmplitude < 300) {
+            dynamicThreshold = 0.1f;
+        } else if (maxAmplitude < 1000) {
+            dynamicThreshold = 0.2f;
+        } else if (maxAmplitude < 3000) {
+            dynamicThreshold = 0.3f;
+        }
+
+        int speechFrames = 0;
+        try (TenVad vad = new TenVad(CaptionsConfig.VAD_FRAME_SIZE, dynamicThreshold)) {
+            for (short[] frame : decodedFrames) {
+                TenVad.VadResult res = vad.process(frame);
+                if (res.isSpeech) speechFrames++;
+            }
+        }
+        
+        boolean isSpeech = (double) speechFrames / totalValidFrames >= CaptionsConfig.MIN_SPEECH_PERCENTAGE;
+        return new VadStats(isSpeech, speechFrames, totalValidFrames);
     }
 
     private void addCaption(VoiceSession session, String displayName, String text, String debugStr) {
