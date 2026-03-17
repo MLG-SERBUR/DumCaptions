@@ -44,7 +44,7 @@ public class GroqClient {
         }
     }
 
-    public GroqResult translateAudio(byte[] audioData, String filename, String prompt, String mode) throws IOException {
+    public GroqResult translateAudio(byte[] audioData, String filename, String prompt, String mode, String userIdentifier) throws IOException {
         // --- RATE LIMITER ---
         long now = System.currentTimeMillis();
         long elapsed = now - lastReqTime.get();
@@ -102,7 +102,7 @@ public class GroqClient {
                 .addHeader("Authorization", "Bearer " + apiKey)
                 .build();
 
-        logger.info("Sending {} bytes to Groq API ({})", audioData.length, targetUrl);
+        logger.info("[{}] Sending {} bytes to Groq API ({})", userIdentifier, audioData.length, targetUrl);
 
         try (Response response = httpClient.newCall(request).execute()) {
             if (!response.isSuccessful()) {
@@ -112,11 +112,11 @@ public class GroqClient {
             }
 
             GroqVerboseResponse result = objectMapper.readValue(response.body().byteStream(), GroqVerboseResponse.class);
-            return processSegments(result);
+            return processSegments(result, userIdentifier);
         }
     }
 
-    private GroqResult processSegments(GroqVerboseResponse result) {
+    private GroqResult processSegments(GroqVerboseResponse result, String userIdentifier) {
         List<GroqSegment> validSegments = new ArrayList<>();
         List<String> debugLogs = new ArrayList<>();
 
@@ -129,20 +129,20 @@ public class GroqClient {
 
                 // Rule A: High no_speech probability
                 if (seg.noSpeechProb > 0.2) {
-                    logger.info("high no_speech_prob: '{}' (no_speech_prob={})", seg.text, seg.noSpeechProb);
+                    logger.info("[{}] high no_speech_prob: '{}' (no_speech_prob={})", userIdentifier, seg.text, seg.noSpeechProb);
                     continue;
                 }
 
                 // Rule B: High compression ratio (hallucination loops)
                 if (seg.compressionRatio > 2.0) {
-                    logger.info("high compression_ratio: '{}' (compression_ratio={})", seg.text, seg.compressionRatio);
+                    logger.info("[{}] high compression_ratio: '{}' (compression_ratio={})", userIdentifier, seg.text, seg.compressionRatio);
                     continue;
                 }
 
                 // Rule C: Hallucination filter
                 String cleanedText = filterHallucinations(seg.text);
                 if (cleanedText == null || cleanedText.isEmpty()) {
-                    logger.info("Blacklisted text: '{}'", seg.text);
+                    logger.info("[{}] Blacklisted text: '{}'", userIdentifier, seg.text);
                     continue;
                 }
 
@@ -163,7 +163,7 @@ public class GroqClient {
 
                     if (minDuration > 0 && overlapDuration >= 0.5 * minDuration) {
                         if (seg.text.trim().length() > lastSeg.text.trim().length()) {
-                            logger.info("Overlapping segments. Replacing '{}' with '{}'", lastSeg.text, seg.text);
+                            logger.info("[{}] Overlapping segments. Replacing '{}' with '{}'", userIdentifier, lastSeg.text, seg.text);
                             validSegments.set(validSegments.size() - 1, seg);
                         }
                     } else {

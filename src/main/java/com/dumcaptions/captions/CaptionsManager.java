@@ -244,7 +244,7 @@ public class CaptionsManager extends ListenerAdapter {
                 byte[] oggData = OggOpusWriter.write(packets);
                 
                 String lastText = session.lastUserText.get(userId);
-                GroqClient.GroqResult result = groq.translateAudio(oggData, "audio.ogg", lastText, session.captionMode);
+                GroqClient.GroqResult result = groq.translateAudio(oggData, "audio.ogg", lastText, session.captionMode, displayName);
                 
                 String text = result.text.trim();
                 
