@@ -191,21 +191,23 @@ public class CaptionsManager extends ListenerAdapter {
         if (packets.size() < 25) return; // Ignore small clicks
 
         audioExecutor.submit(() -> {
-            String username = "Unknown (" + userId + ")";
+            String displayName = "Unknown (" + userId + ")";
             try {
-                User user = jda.getUserById(userId);
-                if (user != null) username = user.getName();
-                
                 Member member = jda.getGuildById(session.guildId).getMemberById(userId);
-                if (member != null && member.getNickname() != null) {
-                    username = member.getNickname();
+                if (member != null) {
+                    displayName = member.getEffectiveName();
+                } else {
+                    User user = jda.getUserById(userId);
+                    if (user != null) {
+                        displayName = user.getEffectiveName();
+                    }
                 }
 
                 // VAD Filtering
                 VadStats stats = calculateVad(packets);
                 if (!stats.isSpeech) {
                     logger.info("Dropped buffer for user {}: mostly silence/noise ({}/{} speech frames)", 
-                        username, stats.speechFrames, stats.totalFrames);
+                        displayName, stats.speechFrames, stats.totalFrames);
                     return;
                 }
 
@@ -222,10 +224,10 @@ public class CaptionsManager extends ListenerAdapter {
                 }
 
                 session.lastUserText.put(userId, text);
-                addCaption(session, username, text, result.debugStr);
+                addCaption(session, displayName, text, result.debugStr);
 
             } catch (Exception e) {
-                logger.error("Error processing audio chunk for user {}: {}", username, e.getMessage(), e);
+                logger.error("Error processing audio chunk for user {}: {}", displayName, e.getMessage(), e);
             }
         });
     }
@@ -294,9 +296,9 @@ public class CaptionsManager extends ListenerAdapter {
         }
     }
 
-    private void addCaption(VoiceSession session, String username, String text, String debugStr) {
+    private void addCaption(VoiceSession session, String displayName, String text, String debugStr) {
         synchronized (session.userLogs) {
-            String line = String.format("**%s**: %s", username, text);
+            String line = String.format("**%s**: %s", displayName, text);
             session.userLogs.add(line);
             if (session.userLogs.size() > 15) {
                 session.userLogs.remove(0);
@@ -313,7 +315,7 @@ public class CaptionsManager extends ListenerAdapter {
             if (channel != null) {
                 channel.editMessageEmbedsById(session.embedMsgId, eb.build()).queue(
                     null,
-                    err -> logger.error("Failed to edit captions message for {}: {}", username, err.getMessage())
+                    err -> logger.error("Failed to edit captions message for {}: {}", displayName, err.getMessage())
                 );
             } else {
                 logger.error("Failed to resolve channel ID {} as MessageChannel", session.textChannelId);
