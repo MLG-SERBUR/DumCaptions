@@ -25,6 +25,7 @@ import net.dv8tion.jda.api.components.selections.StringSelectMenu;
 import net.dv8tion.jda.api.managers.AudioManager;
 import io.github.jaredmdobson.concentus.OpusDecoder;
 import io.github.jaredmdobson.concentus.OpusException;
+import net.dv8tion.jda.api.utils.MarkdownSanitizer;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -352,7 +353,8 @@ public class CaptionsManager extends ListenerAdapter {
 
     private void addCaption(VoiceSession session, String displayName, String text, String debugStr) {
         synchronized (session.userLogs) {
-            String line = String.format("**%s**: %s", displayName, text);
+            String escapedText = MarkdownSanitizer.escape(text);
+            String line = String.format("**%s**: %s", displayName, escapedText);
             session.userLogs.add(line);
             while (session.userLogs.size() > 10) {
                 session.userLogs.remove(0);
