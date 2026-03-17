@@ -243,23 +243,54 @@ public class CaptionsManager extends ListenerAdapter {
     }
 
     private VadStats calculateVad(List<byte[]> packets) throws Exception {
+        // Opus supports up to 60ms frames (2880 samples at 48kHz)
+        // Stereo means 2880 * 2 = 5760 shorts
+        short[] pcm = new short[5760]; 
+        int speechFrames = 0;
+        int totalValidFrames = 0;
+
         try (TenVad vad = new TenVad(CaptionsConfig.VAD_FRAME_SIZE, CaptionsConfig.VAD_THRESHOLD)) {
-            OpusDecoder decoder = new OpusDecoder(48000, 1);
-            int speechFrames = 0;
-            short[] pcm = new short[CaptionsConfig.VAD_FRAME_SIZE];
+            // Use 2 channels (Stereo) as Discord typically sends stereo, downmix for VAD
+            OpusDecoder decoder = new OpusDecoder(48000, 2);
+            short[] monoPcm = new short[CaptionsConfig.VAD_FRAME_SIZE];
             
-            for (byte[] opus : packets) {
-                int samples = decoder.decode(opus, 0, opus.length, pcm, 0, CaptionsConfig.VAD_FRAME_SIZE, false);
-                if (samples > 0) {
-                    TenVad.VadResult res = vad.process(pcm);
-                    if (res.isSpeech) speechFrames++;
+            for (int i = 0; i < packets.size(); i++) {
+                byte[] opus = packets.get(i);
+                
+                // Discord sends small "silence" packets (1-3 bytes) or empty packets
+                // These are not valid audio frames for the decoder.
+                if (opus == null || opus.length < 5) {
+                    continue;
+                }
+
+                try {
+                    int samplesPerChannel = decoder.decode(opus, 0, opus.length, pcm, 0, 2880, false);
+                    if (samplesPerChannel > 0) {
+                        totalValidFrames++;
+                        // Downmix to mono for VAD (assuming interleaved stereo: [L,R,L,R...])
+                        for (int s = 0; s < Math.min(samplesPerChannel, CaptionsConfig.VAD_FRAME_SIZE); s++) {
+                            monoPcm[s] = (short) ((pcm[s * 2] + pcm[s * 2 + 1]) / 2);
+                        }
+                        
+                        TenVad.VadResult res = vad.process(monoPcm);
+                        if (res.isSpeech) speechFrames++;
+                    }
+                } catch (OpusException e) {
+                    StringBuilder hex = new StringBuilder();
+                    for (int b = 0; b < Math.min(opus.length, 8); b++) {
+                        hex.append(String.format("%02X ", opus[b]));
+                    }
+                    logger.error("Opus decoder error at packet {}/{} (length: {}): {}. Hex(8): {}", 
+                        i, packets.size(), opus.length, e.getMessage(), hex.toString().trim());
+                    // Don't rethrow, just continue to try other packets if possible
+                    // though corrupted stream usually means we should stop
                 }
             }
-            boolean isSpeech = (double) speechFrames / packets.size() >= CaptionsConfig.MIN_SPEECH_PERCENTAGE;
-            return new VadStats(isSpeech, speechFrames, packets.size());
-        } catch (OpusException e) {
-            logger.error("Opus decoder error: {}", e.getMessage());
-            return new VadStats(true, packets.size(), packets.size()); // Fallback
+            
+            if (totalValidFrames == 0) return new VadStats(false, 0, 0);
+            
+            boolean isSpeech = (double) speechFrames / totalValidFrames >= CaptionsConfig.MIN_SPEECH_PERCENTAGE;
+            return new VadStats(isSpeech, speechFrames, totalValidFrames);
         }
     }
 
