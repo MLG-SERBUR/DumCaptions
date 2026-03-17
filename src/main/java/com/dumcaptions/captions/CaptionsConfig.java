@@ -32,4 +32,7 @@ public class CaptionsConfig {
         "i'll see you in the next one", "if you'd like to subscribe",
         "subtitles by the amara.org community", "i'm sorry"
     };
+
+    // Opus Error handling
+    public static final double MAX_OPUS_ERROR_PERCENTAGE = 0.10; // Only log if > 10% frames fail
 }

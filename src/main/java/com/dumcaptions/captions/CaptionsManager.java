@@ -299,11 +299,10 @@ public class CaptionsManager extends ListenerAdapter {
             OpusDecoder decoder = new OpusDecoder(48000, 2);
             short[] monoPcm = new short[CaptionsConfig.VAD_FRAME_SIZE];
             
+            int errorCount = 0;
             for (int i = 0; i < packets.size(); i++) {
                 byte[] opus = packets.get(i);
                 
-                // Discord sends small "silence" packets (1-3 bytes) or empty packets
-                // These are not valid audio frames for the decoder.
                 if (opus == null || opus.length < 5) {
                     continue;
                 }
@@ -312,7 +311,6 @@ public class CaptionsManager extends ListenerAdapter {
                     int samplesPerChannel = decoder.decode(opus, 0, opus.length, pcm, 0, 2880, false);
                     if (samplesPerChannel > 0) {
                         totalValidFrames++;
-                        // Downmix to mono for VAD (assuming interleaved stereo: [L,R,L,R...])
                         for (int s = 0; s < Math.min(samplesPerChannel, CaptionsConfig.VAD_FRAME_SIZE); s++) {
                             monoPcm[s] = (short) ((pcm[s * 2] + pcm[s * 2 + 1]) / 2);
                         }
@@ -321,22 +319,31 @@ public class CaptionsManager extends ListenerAdapter {
                         if (res.isSpeech) speechFrames++;
                     }
                 } catch (OpusException e) {
-                    StringBuilder hex = new StringBuilder();
-                    for (int b = 0; b < Math.min(opus.length, 8); b++) {
-                        hex.append(String.format("%02X ", opus[b]));
-                    }
-                    
-                    String tocInfo = "unknown";
-                    if (opus.length > 0) {
-                        int toc = opus[0] & 0xFF;
-                        int config = toc >> 3;
-                        int s = (toc >> 2) & 1;
-                        int c = toc & 3;
-                        tocInfo = String.format("TOC[config=%d, s=%d, c=%d]", config, s, c);
-                    }
+                    errorCount++;
+                    // Only log individual packet errors if the error rate starts looking serious
+                    double errorRate = (double) errorCount / packets.size();
+                    if (errorRate > CaptionsConfig.MAX_OPUS_ERROR_PERCENTAGE || errorCount == 1) {
+                        StringBuilder hex = new StringBuilder();
+                        for (int b = 0; b < Math.min(opus.length, 8); b++) {
+                            hex.append(String.format("%02X ", opus[b]));
+                        }
+                        
+                        String tocInfo = "unknown";
+                        if (opus.length > 0) {
+                            int toc = opus[0] & 0xFF;
+                            int config = (toc >> 3) & 0x1F;
+                            int s = (toc >> 2) & 1;
+                            int c = toc & 3;
+                            tocInfo = String.format("TOC[config=%d, s=%d, c=%d]", config, s, c);
+                        }
 
-                    logger.error("Opus decoder error at packet {}/{} (length: {}): {}. Hex(8): {} | {}", 
-                        i, packets.size(), opus.length, e.getMessage(), hex.toString().trim(), tocInfo);
+                        if (errorCount == 1) {
+                            logger.debug("First Opus decoder error in chunk (packet {}/{}): {}", i, packets.size(), e.getMessage());
+                        } else {
+                            logger.warn("Opus decoder error rate high ({}/{} - {}%): Last error at packet {}: {}. Hex(8): {} | {}", 
+                                errorCount, packets.size(), (int)(errorRate * 100), i, e.getMessage(), hex.toString().trim(), tocInfo);
+                        }
+                    }
                 }
             }
             
