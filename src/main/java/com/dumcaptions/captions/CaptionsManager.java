@@ -133,7 +133,7 @@ public class CaptionsManager extends ListenerAdapter {
 
         // Send initial embed
         EmbedBuilder eb = new EmbedBuilder()
-                .setTitle("Translated Captions (English)")
+                .setTitle("whisper-large-v3 (English)")
                 .setDescription("Listening for voices...")
                 .setColor(Color.GREEN)
                 .setFooter("Powered by Groq (Large-Whisper-v3)");
@@ -344,10 +344,10 @@ public class CaptionsManager extends ListenerAdapter {
                 session.userLogs.remove(0);
             }
             
-            String title = "Translated Captions (English)";
-            if ("transcribe".equals(session.captionMode)) title = "Transcribed Captions (Turbo)";
-            else if ("korean".equals(session.captionMode)) title = "Transcribed Captions (Korean)";
-            else if ("arabic".equals(session.captionMode)) title = "Transcribed Captions (Arabic)";
+            String title = "whisper-large-v3 (English)";
+            if ("transcribe".equals(session.captionMode)) title = "whisper-large-v3-turbo (Transcription)";
+            else if ("korean".equals(session.captionMode)) title = "whisper-large-v3 (Korean)";
+            else if ("arabic".equals(session.captionMode)) title = "whisper-large-v3 (Arabic)";
 
             String content = String.join("\n", session.userLogs);
             EmbedBuilder eb = new EmbedBuilder()
