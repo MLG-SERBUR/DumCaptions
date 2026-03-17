@@ -118,13 +118,13 @@ public class GroqClient {
 
     private GroqResult processSegments(GroqVerboseResponse result, String userIdentifier) {
         List<GroqSegment> validSegments = new ArrayList<>();
-        List<String> debugLogs = new ArrayList<>();
+        String firstSegStats = "N/A";
 
         if (result.segments != null) {
             for (GroqSegment seg : result.segments) {
-                if (debugLogs.isEmpty()) {
-                    debugLogs.add(String.format("no_speech: %.2f, comp: %.2f, logprob: %.2f", 
-                            seg.noSpeechProb, seg.compressionRatio, seg.avgLogprob));
+                if (firstSegStats.equals("N/A")) {
+                    firstSegStats = String.format("no_speech: %.2f, comp: %.2f, logprob: %.2f", 
+                            seg.noSpeechProb, seg.compressionRatio, seg.avgLogprob);
                 }
 
                 // Rule A: High no_speech probability
@@ -179,7 +179,20 @@ public class GroqClient {
             finalText.append(seg.text);
         }
 
-        return new GroqResult(finalText.toString().trim(), String.join(" | ", debugLogs));
+        int count = validSegments.size();
+        String resultText = finalText.toString().trim();
+
+        if (count > 0) {
+            logger.info("[{}] Combined {} segments: \"{}\"", userIdentifier, count, resultText);
+            for (int i = 0; i < validSegments.size(); i++) {
+                GroqSegment seg = validSegments.get(i);
+                logger.info("[{}]   Seg #{}: [{}-{}s] '{}'", 
+                        userIdentifier, (i + 1), String.format("%.2f", seg.start), String.format("%.2f", seg.end), seg.text);
+            }
+        }
+
+        String debugStr = String.format("Segments: %d | %s", count, firstSegStats);
+        return new GroqResult(resultText, debugStr);
     }
 
     private String filterHallucinations(String text) {
