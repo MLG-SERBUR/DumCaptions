@@ -325,10 +325,18 @@ public class CaptionsManager extends ListenerAdapter {
                     for (int b = 0; b < Math.min(opus.length, 8); b++) {
                         hex.append(String.format("%02X ", opus[b]));
                     }
-                    logger.error("Opus decoder error at packet {}/{} (length: {}): {}. Hex(8): {}", 
-                        i, packets.size(), opus.length, e.getMessage(), hex.toString().trim());
-                    // Don't rethrow, just continue to try other packets if possible
-                    // though corrupted stream usually means we should stop
+                    
+                    String tocInfo = "unknown";
+                    if (opus.length > 0) {
+                        int toc = opus[0] & 0xFF;
+                        int config = toc >> 3;
+                        int s = (toc >> 2) & 1;
+                        int c = toc & 3;
+                        tocInfo = String.format("TOC[config=%d, s=%d, c=%d]", config, s, c);
+                    }
+
+                    logger.error("Opus decoder error at packet {}/{} (length: {}): {}. Hex(8): {} | {}", 
+                        i, packets.size(), opus.length, e.getMessage(), hex.toString().trim(), tocInfo);
                 }
             }
             
