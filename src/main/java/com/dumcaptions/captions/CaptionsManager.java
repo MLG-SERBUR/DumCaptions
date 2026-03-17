@@ -152,10 +152,13 @@ public class CaptionsManager extends ListenerAdapter {
         audioManager.closeAudioConnection();
         
         // Delete the embed
-        jda.getTextChannelById(session.textChannelId).deleteMessageById(session.embedMsgId).queue(
-            null, 
-            err -> logger.warn("Failed to delete captions message: {}", err.getMessage())
-        );
+        MessageChannel channel = jda.getChannelById(MessageChannel.class, session.textChannelId);
+        if (channel != null && session.embedMsgId != null) {
+            channel.deleteMessageById(session.embedMsgId).queue(
+                null, 
+                err -> logger.warn("Failed to delete captures message: {}", err.getMessage())
+            );
+        }
 
         event.reply("Captions disabled.").queue();
     }
@@ -353,6 +356,8 @@ public class CaptionsManager extends ListenerAdapter {
 
     private void addCaption(VoiceSession session, String displayName, String text, String debugStr) {
         synchronized (session.userLogs) {
+            if (!sessions.containsKey(session.guildId)) return;
+
             String escapedText = MarkdownSanitizer.escape(text);
             String line = String.format("**%s**: %s", displayName, escapedText);
             session.userLogs.add(line);
@@ -375,13 +380,23 @@ public class CaptionsManager extends ListenerAdapter {
             MessageChannel channel = jda.getChannelById(MessageChannel.class, session.textChannelId);
             if (channel != null) {
                 channel.getHistoryAfter(session.embedMsgId, 6).queue(history -> {
+                    // Check if session still active after async fetch
+                    if (!sessions.containsKey(session.guildId)) return;
+
                     if (history.getRetrievedHistory().size() > 5) {
                         channel.deleteMessageById(session.embedMsgId).queue(null, err -> {});
                         channel.sendMessageEmbeds(eb.build())
                                 .setComponents(ActionRow.of(createSelectionMenu(session.guildId, session.captionMode)))
                                 .setSuppressedNotifications(true)
                                 .queue(
-                                    msg -> session.embedMsgId = msg.getId(),
+                                    msg -> {
+                                        // Final check: if user turned off captions while we were resending
+                                        if (!sessions.containsKey(session.guildId)) {
+                                            msg.delete().queue(null, err -> {});
+                                            return;
+                                        }
+                                        session.embedMsgId = msg.getId();
+                                    },
                                     err -> logger.error("Failed to send new captions message for {}: {}", displayName, err.getMessage())
                                 );
                     } else {
