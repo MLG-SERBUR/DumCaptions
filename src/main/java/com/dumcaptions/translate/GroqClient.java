@@ -118,6 +118,7 @@ public class GroqClient {
 
     private GroqResult processSegments(GroqVerboseResponse result, String userIdentifier) {
         List<GroqSegment> validSegments = new ArrayList<>();
+        List<String> mergedSegmentsList = new ArrayList<>();
         String firstSegStats = "N/A";
 
         if (result.segments != null) {
@@ -164,6 +165,7 @@ public class GroqClient {
                     if (minDuration > 0 && overlapDuration >= 0.5 * minDuration) {
                         if (seg.text.trim().length() > lastSeg.text.trim().length()) {
                             logger.info("[{}] Overlapping segments. Replacing '{}' with '{}'", userIdentifier, lastSeg.text, seg.text);
+                            mergedSegmentsList.add(lastSeg.text);
                             validSegments.set(validSegments.size() - 1, seg);
                         }
                     } else {
@@ -180,18 +182,26 @@ public class GroqClient {
         }
 
         int count = validSegments.size();
+        int mergedCount = mergedSegmentsList.size();
         String resultText = finalText.toString().trim();
 
         if (count > 0) {
-            logger.info("[{}] Combined {} segments: \"{}\"", userIdentifier, count, resultText);
+            logger.info("[{}] {} segments: \"{}\"", userIdentifier, count, resultText);
             for (int i = 0; i < validSegments.size(); i++) {
                 GroqSegment seg = validSegments.get(i);
                 logger.info("[{}]   Seg #{}: [{}-{}s] '{}'", 
                         userIdentifier, (i + 1), String.format("%.2f", seg.start), String.format("%.2f", seg.end), seg.text);
             }
         }
+        
+        if (mergedCount > 0) {
+            logger.info("[{}] Merged {} segments: {}", userIdentifier, mergedCount, String.join(" | ", mergedSegmentsList));
+        }
 
-        String debugStr = String.format("Segments: %d | %s", count, firstSegStats);
+        String debugStr = (mergedCount > 0) 
+                ? String.format("Merged: %d | %s", mergedCount, firstSegStats)
+                : firstSegStats;
+
         return new GroqResult(resultText, debugStr);
     }
 
