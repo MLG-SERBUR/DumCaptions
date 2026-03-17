@@ -16,8 +16,6 @@ import java.util.concurrent.atomic.AtomicLong;
 
 public class GroqClient {
     private static final Logger logger = LoggerFactory.getLogger(GroqClient.class);
-    private static final String API_URL = "https://api.groq.com/openai/v1/audio/translations";
-    
     private final String apiKey;
     private final String model;
     private final OkHttpClient httpClient;
@@ -46,7 +44,7 @@ public class GroqClient {
         }
     }
 
-    public GroqResult translateAudio(byte[] audioData, String filename, String prompt) throws IOException {
+    public GroqResult translateAudio(byte[] audioData, String filename, String prompt, String mode) throws IOException {
         // --- RATE LIMITER ---
         long now = System.currentTimeMillis();
         long elapsed = now - lastReqTime.get();
@@ -63,25 +61,48 @@ public class GroqClient {
         }
         lastReqTime.set(System.currentTimeMillis());
 
+        String targetUrl = "https://api.groq.com/openai/v1/audio/translations";
+        String reqModel = this.model;
+        String language = null;
+
+        if ("transcribe".equals(mode)) {
+            targetUrl = "https://api.groq.com/openai/v1/audio/transcriptions";
+            reqModel = "whisper-large-v3-turbo";
+        } else if ("english".equals(mode)) {
+            targetUrl = "https://api.groq.com/openai/v1/audio/translations";
+            reqModel = "whisper-large-v3";
+        } else if ("korean".equals(mode)) {
+            targetUrl = "https://api.groq.com/openai/v1/audio/transcriptions";
+            reqModel = "whisper-large-v3";
+            language = "ko";
+        } else if ("arabic".equals(mode)) {
+            targetUrl = "https://api.groq.com/openai/v1/audio/transcriptions";
+            reqModel = "whisper-large-v3";
+            language = "ar";
+        }
+
         // --- MULTIPART REQUEST ---
         RequestBody fileBody = RequestBody.create(audioData, MediaType.parse("audio/ogg"));
-        MultipartBody requestBody = new MultipartBody.Builder()
+        MultipartBody.Builder rbBuilder = new MultipartBody.Builder()
                 .setType(MultipartBody.FORM)
                 .addFormDataPart("file", filename, fileBody)
-                .addFormDataPart("model", model)
+                .addFormDataPart("model", reqModel)
                 .addFormDataPart("response_format", "verbose_json")
-                .addFormDataPart("temperature", "0")
-                // Prompt: Ported but disabled by default in Go code.
-                // .addFormDataPart("prompt", prompt != null ? prompt : "")
-                .build();
+                .addFormDataPart("temperature", "0");
+                
+        if (language != null) {
+            rbBuilder.addFormDataPart("language", language);
+        }
+
+        MultipartBody requestBody = rbBuilder.build();
 
         Request request = new Request.Builder()
-                .url(API_URL)
+                .url(targetUrl)
                 .post(requestBody)
                 .addHeader("Authorization", "Bearer " + apiKey)
                 .build();
 
-        logger.info("Sending {} bytes to Groq API ({})", audioData.length, API_URL);
+        logger.info("Sending {} bytes to Groq API ({})", audioData.length, targetUrl);
 
         try (Response response = httpClient.newCall(request).execute()) {
             if (!response.isSuccessful()) {

@@ -14,10 +14,14 @@ import net.dv8tion.jda.api.entities.User;
 import net.dv8tion.jda.api.entities.channel.middleman.AudioChannel;
 import net.dv8tion.jda.api.entities.channel.middleman.MessageChannel;
 import net.dv8tion.jda.api.events.interaction.command.SlashCommandInteractionEvent;
+import net.dv8tion.jda.api.events.interaction.component.StringSelectInteractionEvent;
 import net.dv8tion.jda.api.hooks.ListenerAdapter;
 import net.dv8tion.jda.api.interactions.commands.OptionMapping;
 import net.dv8tion.jda.api.interactions.commands.build.Commands;
 import net.dv8tion.jda.api.interactions.commands.build.SubcommandData;
+import net.dv8tion.jda.api.components.actionrow.ActionRow;
+import net.dv8tion.jda.api.components.selections.SelectOption;
+import net.dv8tion.jda.api.components.selections.StringSelectMenu;
 import net.dv8tion.jda.api.managers.AudioManager;
 import io.github.jaredmdobson.concentus.OpusDecoder;
 import io.github.jaredmdobson.concentus.OpusException;
@@ -56,10 +60,37 @@ public class CaptionsManager extends ListenerAdapter {
         public final Map<Long, String> lastUserText = new ConcurrentHashMap<>();
         public final List<String> userLogs = new ArrayList<>();
         public String embedMsgId;
+        public String captionMode = "english";
 
         public VoiceSession(String guildId, String textChannelId) {
             this.guildId = guildId;
             this.textChannelId = textChannelId;
+        }
+    }
+
+    @Override
+    public void onStringSelectInteraction(StringSelectInteractionEvent event) {
+        String componentId = event.getComponentId();
+        if (componentId.startsWith("caption_mode_")) {
+            String guildId = componentId.substring("caption_mode_".length());
+            VoiceSession session = sessions.get(guildId);
+            if (session == null) {
+                event.reply("Session has ended.").setEphemeral(true).queue();
+                return;
+            }
+            String selected = event.getValues().get(0);
+            session.captionMode = selected;
+
+            StringSelectMenu menu = StringSelectMenu.create("caption_mode_" + guildId)
+                    .addOptions(
+                            SelectOption.of("Transcribe", "transcribe").withDescription("whisper-large-v3-turbo").withDefault("transcribe".equals(selected)),
+                            SelectOption.of("English", "english").withDescription("whisper-large-v3, english target").withDefault("english".equals(selected)),
+                            SelectOption.of("Korean", "korean").withDescription("whisper-large-v3, korean target").withDefault("korean".equals(selected)),
+                            SelectOption.of("Arabic", "arabic").withDescription("whisper-large-v3, arabic target").withDefault("arabic".equals(selected))
+                    )
+                    .build();
+
+            event.editComponents(ActionRow.of(menu)).queue();
         }
     }
 
@@ -102,12 +133,21 @@ public class CaptionsManager extends ListenerAdapter {
 
         // Send initial embed
         EmbedBuilder eb = new EmbedBuilder()
-                .setTitle("Translated Captions")
+                .setTitle("Translated Captions (English)")
                 .setDescription("Listening for voices...")
                 .setColor(Color.GREEN)
                 .setFooter("Powered by Groq (Large-Whisper-v3)");
 
-        event.getChannel().sendMessageEmbeds(eb.build()).queue(msg -> {
+        StringSelectMenu menu = StringSelectMenu.create("caption_mode_" + guild.getId())
+                .addOptions(
+                        SelectOption.of("Transcribe", "transcribe").withDescription("whisper-large-v3-turbo"),
+                        SelectOption.of("English", "english").withDescription("whisper-large-v3, english target").withDefault(true),
+                        SelectOption.of("Korean", "korean").withDescription("whisper-large-v3, korean target"),
+                        SelectOption.of("Arabic", "arabic").withDescription("whisper-large-v3, arabic target")
+                )
+                .build();
+
+        event.getChannel().sendMessageEmbeds(eb.build()).setComponents(ActionRow.of(menu)).queue(msg -> {
             session.embedMsgId = msg.getId();
             event.getHook().editOriginal("Captions enabled. I've joined " + vc.getName()).queue();
         });
@@ -215,7 +255,7 @@ public class CaptionsManager extends ListenerAdapter {
                 byte[] oggData = OggOpusWriter.write(packets);
                 
                 String lastText = session.lastUserText.get(userId);
-                GroqClient.GroqResult result = groq.translateAudio(oggData, "audio.ogg", lastText);
+                GroqClient.GroqResult result = groq.translateAudio(oggData, "audio.ogg", lastText, session.captionMode);
                 
                 String text = result.text.trim();
                 
@@ -304,9 +344,14 @@ public class CaptionsManager extends ListenerAdapter {
                 session.userLogs.remove(0);
             }
             
+            String title = "Translated Captions (English)";
+            if ("transcribe".equals(session.captionMode)) title = "Transcribed Captions (Turbo)";
+            else if ("korean".equals(session.captionMode)) title = "Transcribed Captions (Korean)";
+            else if ("arabic".equals(session.captionMode)) title = "Transcribed Captions (Arabic)";
+
             String content = String.join("\n", session.userLogs);
             EmbedBuilder eb = new EmbedBuilder()
-                    .setTitle("Groq (Large-Whisper-v3)")
+                    .setTitle(title)
                     .setDescription(content)
                     .setColor(Color.GREEN)
                     .setFooter(debugStr.length() > 2048 ? debugStr.substring(0, 2045) + "..." : debugStr);
