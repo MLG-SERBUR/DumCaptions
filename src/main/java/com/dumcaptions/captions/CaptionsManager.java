@@ -281,10 +281,11 @@ public class CaptionsManager extends ListenerAdapter {
             MessageChannel channel = jda.getChannelById(MessageChannel.class, session.textChannelId);
             if (channel != null) {
                 channel.editMessageEmbedsById(session.embedMsgId, eb.build()).queue(
+                    null,
                     err -> logger.error("Failed to edit captions message for {}: {}", username, err.getMessage())
                 );
             } else {
-                logger.error("Failed to resolution channel ID {} as MessageChannel", session.textChannelId);
+                logger.error("Failed to resolve channel ID {} as MessageChannel", session.textChannelId);
             }
         }
     }
