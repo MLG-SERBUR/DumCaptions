@@ -51,7 +51,7 @@ public class GroqClient {
         if (elapsed < CaptionsConfig.RATE_LIMIT_INTERVAL_MS) {
             long sleepTime = CaptionsConfig.RATE_LIMIT_INTERVAL_MS - elapsed;
             if (sleepTime > 1000) {
-                logger.info("Rate limiting: sleeping for {}ms", sleepTime);
+                logger.info("Rate limit: {}ms", sleepTime);
             }
             try {
                 Thread.sleep(sleepTime);
@@ -102,7 +102,7 @@ public class GroqClient {
                 .addHeader("Authorization", "Bearer " + apiKey)
                 .build();
 
-        logger.info("[{}] {} bytes ({}, vad_threshold={})", userIdentifier, audioData.length, targetUrl, String.format("%.2f", vadThreshold));
+        logger.info("[{}] {} bytes thr={}", userIdentifier, audioData.length, String.format("%.2f", vadThreshold));
 
         try (Response response = httpClient.newCall(request).execute()) {
             if (!response.isSuccessful()) {
@@ -130,20 +130,20 @@ public class GroqClient {
 
                 // Rule A: High no_speech probability
                 if (seg.noSpeechProb > 0.2) {
-                    logger.info("[{}] high no_speech_prob: '{}' (no_speech_prob={})", userIdentifier, seg.text, seg.noSpeechProb);
+                    logger.info("[{}] no_speech: '{}'", userIdentifier, seg.text);
                     continue;
                 }
 
                 // Rule B: High compression ratio (hallucination loops)
                 if (seg.compressionRatio > 2.0) {
-                    logger.info("[{}] high compression_ratio: '{}' (compression_ratio={})", userIdentifier, seg.text, seg.compressionRatio);
+                    logger.info("[{}] high_comp: '{}'", userIdentifier, seg.text);
                     continue;
                 }
 
                 // Rule C: Hallucination filter
                 String cleanedText = filterHallucinations(seg.text);
                 if (cleanedText == null || cleanedText.isEmpty()) {
-                    logger.info("[{}] Blacklisted text: '{}'", userIdentifier, seg.text);
+                    logger.info("[{}] blacklist: '{}'", userIdentifier, seg.text);
                     continue;
                 }
 
@@ -164,7 +164,7 @@ public class GroqClient {
 
                     if (minDuration > 0 && overlapDuration >= 0.5 * minDuration) {
                         if (seg.text.trim().length() > lastSeg.text.trim().length()) {
-                            logger.info("[{}] Overlapping segments. Replacing '{}' with '{}'", userIdentifier, lastSeg.text, seg.text);
+                            logger.info("[{}] overlap: '{}' → '{}'", userIdentifier, lastSeg.text, seg.text);
                             mergedSegmentsList.add(lastSeg.text);
                             validSegments.set(validSegments.size() - 1, seg);
                         }
@@ -186,16 +186,16 @@ public class GroqClient {
         String resultText = finalText.toString().trim();
 
         if (count > 0) {
-            logger.info("[{}] {} segments: \"{}\"", userIdentifier, count, resultText);
+            logger.info("[{}] {} seg: \"{}\"", userIdentifier, count, resultText);
             for (int i = 0; i < validSegments.size(); i++) {
                 GroqSegment seg = validSegments.get(i);
-                logger.info("[{}]   Seg #{}: [{}-{}s] '{}'", 
+                logger.info("[{}]   #{} [{}-{}s] '{}'", 
                         userIdentifier, (i + 1), String.format("%.2f", seg.start), String.format("%.2f", seg.end), seg.text);
             }
         }
         
         if (mergedCount > 0) {
-            logger.info("[{}] Merged {} segments: {}", userIdentifier, mergedCount, String.join(" | ", mergedSegmentsList));
+            logger.info("[{}] merged {}: {}", userIdentifier, mergedCount, String.join(" | ", mergedSegmentsList));
         }
 
         String debugStr = (mergedCount > 0) 

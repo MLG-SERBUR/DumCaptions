@@ -242,7 +242,7 @@ public class CaptionsManager extends ListenerAdapter {
                 VadStats stats = calculateVad(packets, vadThreshold, session, userId);
                 
                 if (!stats.isSpeech) {
-                    logger.info("Dropped buffer for user {}: {}", displayName, stats.debugReason);
+                    logger.info("VAD REJECT {}: {}", displayName, stats.debugReason);
                     
                     // Update embed footer with VAD rejection info
                     updateVadDebug(session, userId, displayName + " VAD: " + stats.debugReason);
@@ -257,7 +257,7 @@ public class CaptionsManager extends ListenerAdapter {
                                 float newThreshold = Math.max(CaptionsConfig.VAD_MIN_THRESHOLD, vadThreshold - CaptionsConfig.VAD_STEP_DOWN);
                                 session.userVadThresholds.put(userId, newThreshold);
                                 session.userVadDroppedSequential.put(userId, 0);
-                                logger.info("Lowered VAD threshold for new user {} to {}", displayName, String.format("%.2f", newThreshold));
+                                logger.info("VAD threshold ↓ {} → {}", displayName, String.format("%.2f", newThreshold));
                             }
                         }
                     }
@@ -265,7 +265,7 @@ public class CaptionsManager extends ListenerAdapter {
                 }
                 
                 // Passed VAD
-                logger.info("VAD PASS for user {}: {}", displayName, stats.debugReason);
+                logger.info("VAD PASS {}: {}", displayName, stats.debugReason);
                 session.userHasPassedVad.put(userId, true);
 
                 // Wrap in OGG
@@ -285,7 +285,7 @@ public class CaptionsManager extends ListenerAdapter {
                     float newThreshold = Math.min(CaptionsConfig.VAD_MAX_THRESHOLD, vadThreshold + CaptionsConfig.VAD_STEP_UP);
                     if (newThreshold != vadThreshold) {
                         session.userVadThresholds.put(userId, newThreshold);
-                        logger.info("Increased VAD threshold for user {} to {} due to API feedback", displayName, String.format("%.2f", newThreshold));
+                        logger.info("VAD threshold ↑ {} → {} (API)", displayName, String.format("%.2f", newThreshold));
                     }
                     return;
                 }
