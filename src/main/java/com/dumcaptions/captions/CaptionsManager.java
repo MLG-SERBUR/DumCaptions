@@ -493,7 +493,7 @@ public class CaptionsManager extends ListenerAdapter {
 
             // Add VAD failures as a field (supports Markdown)
             if (!session.userVadDebug.isEmpty()) {
-                eb.addField("debug", vadFieldContent.length() > 1024 ? vadFieldContent.substring(0, 1021) + "..." : vadFieldContent, false);
+                eb.addField("Debug", vadFieldContent.length() > 1024 ? vadFieldContent.substring(0, 1021) + "..." : vadFieldContent, false);
             }
 
             channel.editMessageEmbedsById(session.embedMsgId, eb.build()).queue(
@@ -529,7 +529,7 @@ public class CaptionsManager extends ListenerAdapter {
             // Add VAD failures as a field if any exist (supports Markdown formatting)
             if (!session.userVadDebug.isEmpty()) {
                 String vadFieldContent = buildVadDebugFooter(session);
-                eb.addField("VAD Rejections", vadFieldContent.length() > 1024 ? vadFieldContent.substring(0, 1021) + "..." : vadFieldContent, false);
+                eb.addField("debug", vadFieldContent.length() > 1024 ? vadFieldContent.substring(0, 1021) + "..." : vadFieldContent, false);
             }
 
             MessageChannel channel = jda.getChannelById(MessageChannel.class, session.textChannelId);
