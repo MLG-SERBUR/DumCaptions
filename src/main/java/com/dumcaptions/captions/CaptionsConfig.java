@@ -19,14 +19,17 @@ public class CaptionsConfig {
     // TEN-VAD parameters
     public static final int VAD_FRAME_SIZE = 960;               // 20ms at 48kHz
     public static final float VAD_MAX_THRESHOLD = 0.5f;
-    public static final float VAD_MIN_THRESHOLD = 0.05f;        // Lowered from 0.1 to catch softer speech
+    public static final float VAD_MIN_THRESHOLD = 0.1f;
     public static final float VAD_STEP_UP = 0.05f;
-    public static final float VAD_STEP_DOWN = 0.15f;            // More aggressive step down for soft users
-    public static final double MIN_SPEECH_PERCENTAGE = 0.03;    // Lowered from 5% to 3% to catch soft speech
+    public static final float VAD_STEP_DOWN = 0.1f;
+    public static final double MIN_SPEECH_PERCENTAGE = 0.05;    // Drop if < 5% speech
     
-    // Per-user amplitude tracking
-    public static final double AMPLITUDE_EMA_ALPHA = 0.1;       // Exponential moving average smoothing factor
-    public static final int AMPLITUDE_SOFT_THRESHOLD = 2000;    // Below this is considered "soft" voice
+    // Noise floor and hysteresis parameters
+    public static final double NOISE_FLOOR_ALPHA = 0.02;        // Slow EMA for noise floor (very stable)
+    public static final int CONSECUTIVE_SPEECH_FRAMES = 3;      // Require 3 consecutive speech frames to start
+    public static final float HYSTERESIS_START_BONUS = 0.05f;   // Higher threshold to START speech
+    public static final float HYSTERESIS_CONTINUE_BONUS = -0.05f; // Lower threshold to CONTINUE speech
+    public static final int MIN_CONSECUTIVE_FOR_TRIGGER = 4;    // Need 4+ consecutive frames to trigger isSpeech
     
     // Overlap management
     public static final int OVERLAP_PACKETS = 100;              // 2 seconds (100 * 20ms)

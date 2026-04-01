@@ -63,7 +63,7 @@ public class CaptionsManager extends ListenerAdapter {
         public final Map<Long, Float> userVadThresholds = new ConcurrentHashMap<>();
         public final Map<Long, Integer> userVadDroppedSequential = new ConcurrentHashMap<>();
         public final Map<Long, Boolean> userHasPassedVad = new ConcurrentHashMap<>();
-        public final Map<Long, Double> userAvgAmplitude = new ConcurrentHashMap<>();  // Track per-user volume
+        public final Map<Long, Double> userNoiseFloor = new ConcurrentHashMap<>();  // Track per-user noise floor
         public String embedMsgId;
         public String captionMode = "english";
 
@@ -241,9 +241,7 @@ public class CaptionsManager extends ListenerAdapter {
                 VadStats stats = calculateVad(packets, vadThreshold, session, userId);
                 
                 if (!stats.isSpeech) {
-                    logger.info("Dropped buffer for user {}: mostly silence/noise ({}/{} speech frames, peakAmp={}, weightedScore={}, vad_threshold={})", 
-                        displayName, stats.speechFrames, stats.totalFrames, stats.maxAmplitude, 
-                        String.format("%.3f", stats.weightedSpeechScore), String.format("%.2f", vadThreshold));
+                    logger.info("Dropped buffer for user {}: {}", displayName, stats.debugReason);
                         
                     // VAD Lowering Logic
                     if (stats.maxAmplitude > 500 || packets.size() > 50) {
@@ -263,6 +261,7 @@ public class CaptionsManager extends ListenerAdapter {
                 }
                 
                 // Passed VAD
+                logger.info("VAD PASS for user {}: {}", displayName, stats.debugReason);
                 session.userHasPassedVad.put(userId, true);
 
                 // Wrap in OGG
@@ -284,7 +283,9 @@ public class CaptionsManager extends ListenerAdapter {
                 }
 
                 session.lastUserText.put(userId, text);
-                addCaption(session, displayName, text, result.debugStr);
+                // Prepend username to VAD debug info for footer
+                String vadDebugStr = displayName + " VAD: " + stats.debugReason;
+                addCaption(session, displayName, text, result.debugStr, vadDebugStr);
 
             } catch (Exception e) {
                 logger.error("Error processing audio chunk for user {}: {}", displayName, e.getMessage(), e);
@@ -298,48 +299,22 @@ public class CaptionsManager extends ListenerAdapter {
         public final int totalFrames;
         public final int maxAmplitude;
         public final double weightedSpeechScore;
+        public final String debugReason;
 
-        public VadStats(boolean isSpeech, int speechFrames, int totalFrames, int maxAmplitude, double weightedSpeechScore) {
+        public VadStats(boolean isSpeech, int speechFrames, int totalFrames, int maxAmplitude, double weightedSpeechScore, String debugReason) {
             this.isSpeech = isSpeech;
             this.speechFrames = speechFrames;
             this.totalFrames = totalFrames;
             this.maxAmplitude = maxAmplitude;
             this.weightedSpeechScore = weightedSpeechScore;
+            this.debugReason = debugReason;
         }
-    }
-
-    /**
-     * Calculate dynamic VAD threshold based on amplitude.
-     * Uses continuous function instead of discrete steps for smoother adaptation.
-     * Softer voices get lower thresholds (more permissive detection).
-     */
-    private float calculateDynamicThreshold(int maxAmplitude, float userThreshold) {
-        // Continuous formula: softer = lower threshold
-        // Maps amplitude 0-32767 to threshold ~0.05-0.5
-        // Uses logarithmic scale for better handling of volume ranges
-        if (maxAmplitude <= 0) return CaptionsConfig.VAD_MIN_THRESHOLD;
-        
-        double logAmp = Math.log10(maxAmplitude);
-        double logMax = Math.log10(32767);
-        
-        // Map log amplitude to threshold range
-        float amplitudeThreshold = (float) (CaptionsConfig.VAD_MIN_THRESHOLD + 
-            (CaptionsConfig.VAD_MAX_THRESHOLD - CaptionsConfig.VAD_MIN_THRESHOLD) * (logAmp / logMax));
-        
-        // Clamp to valid range
-        amplitudeThreshold = Math.max(CaptionsConfig.VAD_MIN_THRESHOLD, 
-            Math.min(CaptionsConfig.VAD_MAX_THRESHOLD, amplitudeThreshold));
-        
-        // Use the minimum of amplitude-based and user-learned threshold
-        // This ensures soft-voice users always get more permissive detection
-        return Math.min(amplitudeThreshold, userThreshold);
     }
 
     private VadStats calculateVad(List<byte[]> packets, float vadThreshold, VoiceSession session, long userId) throws Exception {
         List<short[]> decodedFrames = new ArrayList<>();
         int maxAmplitude = 0;
         int totalValidFrames = 0;
-        double totalRmsEnergy = 0;
 
         OpusDecoder decoder = new OpusDecoder(48000, 2);
         short[] pcm = new short[5760]; 
@@ -357,17 +332,11 @@ public class CaptionsManager extends ListenerAdapter {
                 if (samplesPerChannel > 0) {
                     totalValidFrames++;
                     short[] monoPcm = new short[CaptionsConfig.VAD_FRAME_SIZE];
-                    long sumSquares = 0;
                     for (int s = 0; s < Math.min(samplesPerChannel, CaptionsConfig.VAD_FRAME_SIZE); s++) {
                         short val = (short) ((pcm[s * 2] + pcm[s * 2 + 1]) / 2);
                         monoPcm[s] = val;
-                        int absVal = Math.abs(val);
-                        maxAmplitude = Math.max(maxAmplitude, absVal);
-                        sumSquares += (long) val * val;
+                        maxAmplitude = Math.max(maxAmplitude, Math.abs(val));
                     }
-                    // Calculate RMS energy for this frame
-                    double rms = Math.sqrt((double) sumSquares / Math.min(samplesPerChannel, CaptionsConfig.VAD_FRAME_SIZE));
-                    totalRmsEnergy += rms;
                     decodedFrames.add(monoPcm);
                 }
             } catch (OpusException e) {
@@ -398,56 +367,95 @@ public class CaptionsManager extends ListenerAdapter {
             }
         }
         
-        if (totalValidFrames == 0) return new VadStats(false, 0, 0, 0, 0);
+        if (totalValidFrames == 0) return new VadStats(false, 0, 0, 0, 0, "REJECT: no valid frames");
         
-        // Update per-user amplitude tracking (exponential moving average)
-        double prevAvgAmp = session.userAvgAmplitude.getOrDefault(userId, 0.0);
-        double newAvgAmp = prevAvgAmp * (1 - CaptionsConfig.AMPLITUDE_EMA_ALPHA) + 
-                           maxAmplitude * CaptionsConfig.AMPLITUDE_EMA_ALPHA;
-        session.userAvgAmplitude.put(userId, newAvgAmp);
+        // Update noise floor - track the quietest frames as likely noise
+        // Use slow EMA so noise floor is stable and doesn't jump around
+        double currentNoiseFloor = session.userNoiseFloor.getOrDefault(userId, 100.0);
         
-        // Calculate effective threshold using both amplitude and user-learned threshold
-        float dynamicThreshold = calculateDynamicThreshold(maxAmplitude, vadThreshold);
+        // Run VAD with hysteresis: harder to START, easier to CONTINUE
+        // First pass: use higher threshold to find definite speech starts
+        float startThreshold = Math.min(CaptionsConfig.VAD_MAX_THRESHOLD, vadThreshold + CaptionsConfig.HYSTERESIS_START_BONUS);
         
-        // For very soft users, apply additional sensitivity boost
-        if (newAvgAmp < CaptionsConfig.AMPLITUDE_SOFT_THRESHOLD && 
-            !session.userHasPassedVad.getOrDefault(userId, false)) {
-            // Extra sensitivity for users who haven't passed VAD yet
-            dynamicThreshold = Math.max(CaptionsConfig.VAD_MIN_THRESHOLD, dynamicThreshold * 0.7f);
-        }
-
-        // Run VAD with probability-weighted scoring
-        double weightedSpeechScore = 0;
-        int speechFrames = 0;
+        // Track consecutive speech frames and per-frame results
+        int maxConsecutiveSpeech = 0;
+        int currentConsecutive = 0;
+        int speechFramesHighThreshold = 0;
+        int speechFramesLowThreshold = 0;
+        double weightedScore = 0;
+        List<Boolean> frameResults = new ArrayList<>();
         
-        try (TenVad vad = new TenVad(CaptionsConfig.VAD_FRAME_SIZE, dynamicThreshold)) {
+        try (TenVad vadHigh = new TenVad(CaptionsConfig.VAD_FRAME_SIZE, startThreshold);
+             TenVad vadLow = new TenVad(CaptionsConfig.VAD_FRAME_SIZE, Math.max(CaptionsConfig.VAD_MIN_THRESHOLD, vadThreshold + CaptionsConfig.HYSTERESIS_CONTINUE_BONUS))) {
+            
             for (short[] frame : decodedFrames) {
-                TenVad.VadResult res = vad.process(frame);
-                if (res.isSpeech) {
-                    speechFrames++;
-                    // Weight by probability - higher confidence = more weight
-                    weightedSpeechScore += res.probability;
+                // High threshold for starting speech
+                TenVad.VadResult resHigh = vadHigh.process(frame);
+                // Low threshold for continuing speech (after we've detected speech starting)
+                TenVad.VadResult resLow = vadLow.process(frame);
+                
+                boolean isSpeechStart = resHigh.isSpeech;
+                boolean isSpeechContinue = resLow.isSpeech;
+                
+                // Speech is detected if:
+                // 1. High threshold says speech (definite start), OR
+                // 2. We're in a speech streak AND low threshold says speech (continuation)
+                boolean isSpeech = isSpeechStart || (currentConsecutive > 0 && isSpeechContinue);
+                
+                frameResults.add(isSpeech);
+                
+                if (isSpeech) {
+                    speechFramesLowThreshold++;
+                    if (isSpeechStart) speechFramesHighThreshold++;
+                    currentConsecutive++;
+                    maxConsecutiveSpeech = Math.max(maxConsecutiveSpeech, currentConsecutive);
+                    weightedScore += resLow.probability;
                 } else {
-                    // Still contribute a small amount based on probability
-                    // This helps with borderline speech frames
-                    weightedSpeechScore += res.probability * 0.2;
+                    currentConsecutive = 0;
+                    // Track frame amplitude for noise floor update
+                    // Only update noise floor with quiet, non-speech frames
+                    double frameAmp = 0;
+                    for (short s : frame) frameAmp = Math.max(frameAmp, Math.abs(s));
+                    if (frameAmp < currentNoiseFloor * 3) {
+                        // This frame is likely noise (not much louder than current noise floor)
+                        currentNoiseFloor = currentNoiseFloor * (1 - CaptionsConfig.NOISE_FLOOR_ALPHA) + frameAmp * CaptionsConfig.NOISE_FLOOR_ALPHA;
+                    }
                 }
             }
         }
         
+        session.userNoiseFloor.put(userId, currentNoiseFloor);
+        
         // Normalize weighted score
-        double normalizedScore = weightedSpeechScore / totalValidFrames;
+        double normalizedScore = weightedScore / totalValidFrames;
+        double rawSpeechPercentage = (double) speechFramesLowThreshold / totalValidFrames;
         
-        // Use weighted score for final decision, but also consider raw percentage
-        // This combines the best of both approaches
-        double rawSpeechPercentage = (double) speechFrames / totalValidFrames;
-        boolean isSpeech = normalizedScore >= CaptionsConfig.MIN_SPEECH_PERCENTAGE || 
-                          rawSpeechPercentage >= CaptionsConfig.MIN_SPEECH_PERCENTAGE * 1.5;
+        // Build debug reason explaining the decision
+        StringBuilder debug = new StringBuilder();
+        boolean hasEnoughConsecutive = maxConsecutiveSpeech >= CaptionsConfig.MIN_CONSECUTIVE_FOR_TRIGGER;
+        boolean hasEnoughSpeechPercentage = rawSpeechPercentage >= CaptionsConfig.MIN_SPEECH_PERCENTAGE;
         
-        return new VadStats(isSpeech, speechFrames, totalValidFrames, maxAmplitude, normalizedScore);
+        debug.append(String.format("frames=%d/%d (%.0f%%)", speechFramesLowThreshold, totalValidFrames, rawSpeechPercentage * 100));
+        debug.append(String.format(", consec=%d/%d", maxConsecutiveSpeech, CaptionsConfig.MIN_CONSECUTIVE_FOR_TRIGGER));
+        debug.append(String.format(", amp=%d, nf=%.0f", maxAmplitude, currentNoiseFloor));
+        debug.append(String.format(", thr=%.2f", vadThreshold));
+        
+        // Final decision: need enough consecutive frames AND enough speech percentage
+        // This filters out transient noises like bird chirps that aren't sustained
+        boolean isSpeech = hasEnoughConsecutive && hasEnoughSpeechPercentage;
+        
+        if (isSpeech) {
+            debug.append(" -> PASS");
+        } else {
+            debug.append(" -> REJECT:");
+            if (!hasEnoughConsecutive) debug.append(" low-consec");
+            if (!hasEnoughSpeechPercentage) debug.append(" low-%");
+        }
+        
+        return new VadStats(isSpeech, speechFramesLowThreshold, totalValidFrames, maxAmplitude, normalizedScore, debug.toString());
     }
 
-    private void addCaption(VoiceSession session, String displayName, String text, String debugStr) {
+    private void addCaption(VoiceSession session, String displayName, String text, String debugStr, String vadDebugStr) {
         synchronized (session.userLogs) {
             if (!sessions.containsKey(session.guildId)) return;
 
@@ -463,12 +471,16 @@ public class CaptionsManager extends ListenerAdapter {
             else if ("korean".equals(session.captionMode)) title = "whisper-large-v3 (Korean)";
             else if ("arabic".equals(session.captionMode)) title = "whisper-large-v3 (Arabic)";
 
+            // Combine VAD debug and Groq debug in footer
+            String fullDebugStr = vadDebugStr + " | " + debugStr;
+            if (fullDebugStr.length() > 2048) fullDebugStr = fullDebugStr.substring(0, 2045) + "...";
+
             String content = String.join("\n", session.userLogs);
             EmbedBuilder eb = new EmbedBuilder()
                     .setTitle(title)
                     .setDescription(content)
                     .setColor(Color.GREEN)
-                    .setFooter(debugStr.length() > 2048 ? debugStr.substring(0, 2045) + "..." : debugStr);
+                    .setFooter(fullDebugStr);
 
             MessageChannel channel = jda.getChannelById(MessageChannel.class, session.textChannelId);
             if (channel != null) {
