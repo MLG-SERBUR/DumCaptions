@@ -242,6 +242,9 @@ public class CaptionsManager extends ListenerAdapter {
                 
                 if (!stats.isSpeech) {
                     logger.info("Dropped buffer for user {}: {}", displayName, stats.debugReason);
+                    
+                    // Update embed footer with VAD rejection info
+                    updateVadDebug(session, displayName + " VAD: " + stats.debugReason);
                         
                     // VAD Lowering Logic
                     if (stats.maxAmplitude > 500 || packets.size() > 50) {
@@ -453,6 +456,31 @@ public class CaptionsManager extends ListenerAdapter {
         }
         
         return new VadStats(isSpeech, speechFramesLowThreshold, totalValidFrames, maxAmplitude, normalizedScore, debug.toString());
+    }
+
+    /**
+     * Update only the embed footer with VAD debug info (used for rejections).
+     */
+    private void updateVadDebug(VoiceSession session, String vadDebugStr) {
+        MessageChannel channel = jda.getChannelById(MessageChannel.class, session.textChannelId);
+        if (channel == null || session.embedMsgId == null) return;
+
+        channel.retrieveMessageById(session.embedMsgId).queue(msg -> {
+            if (!sessions.containsKey(session.guildId)) return;
+            if (msg.getEmbeds().isEmpty()) return;
+
+            var existingEmbed = msg.getEmbeds().get(0);
+            EmbedBuilder eb = new EmbedBuilder()
+                    .setTitle(existingEmbed.getTitle())
+                    .setDescription(existingEmbed.getDescription())
+                    .setColor(existingEmbed.getColor())
+                    .setFooter(vadDebugStr.length() > 2048 ? vadDebugStr.substring(0, 2045) + "..." : vadDebugStr);
+
+            channel.editMessageEmbedsById(session.embedMsgId, eb.build()).queue(
+                null,
+                err -> logger.debug("Failed to update VAD debug footer: {}", err.getMessage())
+            );
+        }, err -> logger.debug("Failed to retrieve message for VAD debug update: {}", err.getMessage()));
     }
 
     private void addCaption(VoiceSession session, String displayName, String text, String debugStr, String vadDebugStr) {
