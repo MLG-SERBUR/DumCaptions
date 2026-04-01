@@ -64,6 +64,7 @@ public class CaptionsManager extends ListenerAdapter {
         public final Map<Long, Integer> userVadDroppedSequential = new ConcurrentHashMap<>();
         public final Map<Long, Boolean> userHasPassedVad = new ConcurrentHashMap<>();
         public final Map<Long, Double> userNoiseFloor = new ConcurrentHashMap<>();  // Track per-user noise floor
+        public final Map<Long, String> userVadDebug = new ConcurrentHashMap<>();  // Track per-user VAD debug info
         public String embedMsgId;
         public String captionMode = "english";
 
@@ -244,7 +245,7 @@ public class CaptionsManager extends ListenerAdapter {
                     logger.info("Dropped buffer for user {}: {}", displayName, stats.debugReason);
                     
                     // Update embed footer with VAD rejection info
-                    updateVadDebug(session, displayName + " VAD: " + stats.debugReason);
+                    updateVadDebug(session, userId, displayName + " VAD: " + stats.debugReason);
                         
                     // VAD Lowering Logic
                     if (stats.maxAmplitude > 500 || packets.size() > 50) {
@@ -276,7 +277,11 @@ public class CaptionsManager extends ListenerAdapter {
                 String text = result.text.trim();
                 
                 if (text.isEmpty()) {
-                    // API Incremeting logic
+                    // API returned empty - show VAD debug + Groq debug as post-filter rejection
+                    String vadDebugStr = displayName + " VAD: " + stats.debugReason + " | " + result.debugStr;
+                    updateVadDebug(session, userId, vadDebugStr);
+                    
+                    // API Incrementing logic
                     float newThreshold = Math.min(CaptionsConfig.VAD_MAX_THRESHOLD, vadThreshold + CaptionsConfig.VAD_STEP_UP);
                     if (newThreshold != vadThreshold) {
                         session.userVadThresholds.put(userId, newThreshold);
@@ -286,9 +291,9 @@ public class CaptionsManager extends ListenerAdapter {
                 }
 
                 session.lastUserText.put(userId, text);
-                // Prepend username to VAD debug info for footer
-                String vadDebugStr = displayName + " VAD: " + stats.debugReason;
-                addCaption(session, displayName, text, result.debugStr, vadDebugStr);
+                // Successful caption - remove VAD debug from footer
+                session.userVadDebug.remove(userId);
+                addCaption(session, displayName, text, result.debugStr);
 
             } catch (Exception e) {
                 logger.error("Error processing audio chunk for user {}: {}", displayName, e.getMessage(), e);
@@ -459,9 +464,20 @@ public class CaptionsManager extends ListenerAdapter {
     }
 
     /**
+     * Build combined VAD debug footer from all users.
+     */
+    private String buildVadDebugFooter(VoiceSession session) {
+        if (session.userVadDebug.isEmpty()) return "No VAD data";
+        return String.join(" | ", session.userVadDebug.values());
+    }
+
+    /**
      * Update only the embed footer with VAD debug info (used for rejections).
      */
-    private void updateVadDebug(VoiceSession session, String vadDebugStr) {
+    private void updateVadDebug(VoiceSession session, long userId, String vadDebugStr) {
+        session.userVadDebug.put(userId, vadDebugStr);
+        String footer = buildVadDebugFooter(session);
+
         MessageChannel channel = jda.getChannelById(MessageChannel.class, session.textChannelId);
         if (channel == null || session.embedMsgId == null) return;
 
@@ -474,7 +490,7 @@ public class CaptionsManager extends ListenerAdapter {
                     .setTitle(existingEmbed.getTitle())
                     .setDescription(existingEmbed.getDescription())
                     .setColor(existingEmbed.getColor())
-                    .setFooter(vadDebugStr.length() > 2048 ? vadDebugStr.substring(0, 2045) + "..." : vadDebugStr);
+                    .setFooter(footer.length() > 2048 ? footer.substring(0, 2045) + "..." : footer);
 
             channel.editMessageEmbedsById(session.embedMsgId, eb.build()).queue(
                 null,
@@ -483,7 +499,7 @@ public class CaptionsManager extends ListenerAdapter {
         }, err -> logger.debug("Failed to retrieve message for VAD debug update: {}", err.getMessage()));
     }
 
-    private void addCaption(VoiceSession session, String displayName, String text, String debugStr, String vadDebugStr) {
+    private void addCaption(VoiceSession session, String displayName, String text, String debugStr) {
         synchronized (session.userLogs) {
             if (!sessions.containsKey(session.guildId)) return;
 
@@ -499,8 +515,9 @@ public class CaptionsManager extends ListenerAdapter {
             else if ("korean".equals(session.captionMode)) title = "whisper-large-v3 (Korean)";
             else if ("arabic".equals(session.captionMode)) title = "whisper-large-v3 (Arabic)";
 
-            // Combine VAD debug and Groq debug in footer
-            String fullDebugStr = vadDebugStr + " | " + debugStr;
+            // Build combined footer with VAD debug (only for rejected users) + Groq debug
+            String vadFooter = buildVadDebugFooter(session);
+            String fullDebugStr = vadFooter.equals("No VAD data") ? debugStr : vadFooter + " | " + debugStr;
             if (fullDebugStr.length() > 2048) fullDebugStr = fullDebugStr.substring(0, 2045) + "...";
 
             String content = String.join("\n", session.userLogs);
