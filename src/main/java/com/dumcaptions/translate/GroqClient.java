@@ -213,7 +213,7 @@ public class GroqClient {
         debugStrBuilder.append(firstSegStats);
         
         if (!blacklistedTexts.isEmpty()) {
-            debugStrBuilder.append(" | Blacklisted: ").append(String.join(", ", blacklistedTexts));
+            debugStrBuilder.append(" | **Blacklisted: ").append(String.join(", ", blacklistedTexts)).append("**");
         }
 
         return new GroqResult(resultText, debugStrBuilder.toString());

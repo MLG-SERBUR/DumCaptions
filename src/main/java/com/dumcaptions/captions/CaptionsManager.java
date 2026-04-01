@@ -466,7 +466,7 @@ public class CaptionsManager extends ListenerAdapter {
      */
     private String buildVadDebugFooter(VoiceSession session) {
         if (session.userVadDebug.isEmpty()) return "No VAD data";
-        return String.join(" | ", session.userVadDebug.values());
+        return String.join("\n", session.userVadDebug.values());
     }
 
     /**
