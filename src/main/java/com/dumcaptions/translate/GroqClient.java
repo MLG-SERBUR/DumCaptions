@@ -124,8 +124,14 @@ public class GroqClient {
         if (result.segments != null) {
             for (GroqSegment seg : result.segments) {
                 if (firstSegStats.equals("N/A")) {
-                    firstSegStats = String.format("no_speech: %.2f, comp: %.2f, logprob: %.2f", 
-                            seg.noSpeechProb, seg.compressionRatio, seg.avgLogprob);
+                    String noSpeechPart = String.format("no_speech: %.2f", seg.noSpeechProb);
+                    if (seg.noSpeechProb > 0.2) noSpeechPart = "**" + noSpeechPart + "**";
+                    
+                    String compPart = String.format("comp: %.2f", seg.compressionRatio);
+                    if (seg.compressionRatio > 2.0) compPart = "**" + compPart + "**";
+
+                    firstSegStats = String.format("%s, %s, logprob: %.2f", 
+                            noSpeechPart, compPart, seg.avgLogprob);
                 }
 
                 // Rule A: High no_speech probability

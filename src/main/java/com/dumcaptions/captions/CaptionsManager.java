@@ -443,8 +443,14 @@ public class CaptionsManager extends ListenerAdapter {
         boolean hasEnoughConsecutive = maxConsecutiveSpeech >= CaptionsConfig.MIN_CONSECUTIVE_FOR_TRIGGER;
         boolean hasEnoughSpeechPercentage = rawSpeechPercentage >= CaptionsConfig.MIN_SPEECH_PERCENTAGE;
         
-        debug.append(String.format("frames=%d/%d (%.0f%%)", speechFramesLowThreshold, totalValidFrames, rawSpeechPercentage * 100));
-        debug.append(String.format(", consec=%d/%d", maxConsecutiveSpeech, CaptionsConfig.MIN_CONSECUTIVE_FOR_TRIGGER));
+        String framesPart = String.format("frames=%d/%d (%.0f%%)", speechFramesLowThreshold, totalValidFrames, rawSpeechPercentage * 100);
+        if (!hasEnoughSpeechPercentage) framesPart = "**" + framesPart + "**";
+        debug.append(framesPart);
+
+        String consecPart = String.format(", consec=%d/%d", maxConsecutiveSpeech, CaptionsConfig.MIN_CONSECUTIVE_FOR_TRIGGER);
+        if (!hasEnoughConsecutive) consecPart = "**" + consecPart + "**";
+        debug.append(consecPart);
+
         debug.append(String.format(", amp=%d, nf=%.0f", maxAmplitude, currentNoiseFloor));
         debug.append(String.format(", thr=%.2f", vadThreshold));
         
@@ -454,10 +460,6 @@ public class CaptionsManager extends ListenerAdapter {
         
         if (isSpeech) {
             debug.append(" -> PASS");
-        } else {
-            debug.append(" -> REJECT:");
-            if (!hasEnoughConsecutive) debug.append(" low-consec");
-            if (!hasEnoughSpeechPercentage) debug.append(" low-%");
         }
         
         return new VadStats(isSpeech, speechFramesLowThreshold, totalValidFrames, maxAmplitude, normalizedScore, debug.toString());
