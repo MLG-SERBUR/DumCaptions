@@ -447,9 +447,9 @@ public class CaptionsManager extends ListenerAdapter {
         if (!hasEnoughSpeechPercentage) framesPart = "**" + framesPart + "**";
         debug.append(framesPart);
 
-        String consecPart = String.format(", consec=%d/%d", maxConsecutiveSpeech, CaptionsConfig.MIN_CONSECUTIVE_FOR_TRIGGER);
+        String consecPart = String.format("consec=%d/%d", maxConsecutiveSpeech, CaptionsConfig.MIN_CONSECUTIVE_FOR_TRIGGER);
         if (!hasEnoughConsecutive) consecPart = "**" + consecPart + "**";
-        debug.append(consecPart);
+        debug.append(", ").append(consecPart);
 
         debug.append(String.format(", amp=%d, nf=%.0f", maxAmplitude, currentNoiseFloor));
         debug.append(String.format(", thr=%.2f", vadThreshold));
