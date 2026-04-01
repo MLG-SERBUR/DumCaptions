@@ -245,7 +245,7 @@ public class CaptionsManager extends ListenerAdapter {
                     logger.info("VAD REJECT {}: {}", displayName, stats.debugReason);
                     
                     // Update embed footer with VAD rejection info
-                    updateVadDebug(session, userId, displayName + " VAD: " + stats.debugReason);
+                    updateVadDebug(session, userId, displayName + ": " + stats.debugReason);
                         
                     // VAD Lowering Logic
                     if (stats.maxAmplitude > 500 || packets.size() > 50) {
@@ -443,7 +443,7 @@ public class CaptionsManager extends ListenerAdapter {
         boolean hasEnoughConsecutive = maxConsecutiveSpeech >= CaptionsConfig.MIN_CONSECUTIVE_FOR_TRIGGER;
         boolean hasEnoughSpeechPercentage = rawSpeechPercentage >= CaptionsConfig.MIN_SPEECH_PERCENTAGE;
         
-        String framesPart = String.format("frames=%d/%d (%.0f%%)", speechFramesLowThreshold, totalValidFrames, rawSpeechPercentage * 100);
+        String framesPart = String.format("%d/%d (%.0f%%)", speechFramesLowThreshold, totalValidFrames, rawSpeechPercentage * 100);
         if (!hasEnoughSpeechPercentage) framesPart = "**" + framesPart + "**";
         debug.append(framesPart);
 
@@ -457,10 +457,6 @@ public class CaptionsManager extends ListenerAdapter {
         // Final decision: need enough consecutive frames AND enough speech percentage
         // This filters out transient noises like bird chirps that aren't sustained
         boolean isSpeech = hasEnoughConsecutive && hasEnoughSpeechPercentage;
-        
-        if (isSpeech) {
-            debug.append(" -> PASS");
-        }
         
         return new VadStats(isSpeech, speechFramesLowThreshold, totalValidFrames, maxAmplitude, normalizedScore, debug.toString());
     }

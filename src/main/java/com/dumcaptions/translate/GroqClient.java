@@ -119,6 +119,7 @@ public class GroqClient {
     private GroqResult processSegments(GroqVerboseResponse result, String userIdentifier) {
         List<GroqSegment> validSegments = new ArrayList<>();
         List<String> mergedSegmentsList = new ArrayList<>();
+        List<String> blacklistedTexts = new ArrayList<>();
         String firstSegStats = "N/A";
 
         if (result.segments != null) {
@@ -150,6 +151,7 @@ public class GroqClient {
                 String cleanedText = filterHallucinations(seg.text);
                 if (cleanedText == null || cleanedText.isEmpty()) {
                     logger.info("[{}] blacklist: '{}'", userIdentifier, seg.text);
+                    blacklistedTexts.add(seg.text.trim());
                     continue;
                 }
 
@@ -204,11 +206,17 @@ public class GroqClient {
             logger.info("[{}] merged {}: {}", userIdentifier, mergedCount, String.join(" | ", mergedSegmentsList));
         }
 
-        String debugStr = (mergedCount > 0) 
-                ? String.format("Merged: %d | %s", mergedCount, firstSegStats)
-                : firstSegStats;
+        StringBuilder debugStrBuilder = new StringBuilder();
+        if (mergedCount > 0) {
+            debugStrBuilder.append(String.format("Merged: %d | ", mergedCount));
+        }
+        debugStrBuilder.append(firstSegStats);
+        
+        if (!blacklistedTexts.isEmpty()) {
+            debugStrBuilder.append(" | Blacklisted: ").append(String.join(", ", blacklistedTexts));
+        }
 
-        return new GroqResult(resultText, debugStr);
+        return new GroqResult(resultText, debugStrBuilder.toString());
     }
 
     private String filterHallucinations(String text) {
