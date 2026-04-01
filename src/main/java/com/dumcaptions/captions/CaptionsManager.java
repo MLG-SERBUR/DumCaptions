@@ -474,11 +474,12 @@ public class CaptionsManager extends ListenerAdapter {
     }
 
     /**
-     * Update only the embed footer with VAD debug info (used for rejections).
+     * Update embed with VAD debug info (used for rejections).
+     * Uses a field for VAD failures to support Markdown formatting.
      */
     private void updateVadDebug(VoiceSession session, long userId, String vadDebugStr) {
         session.userVadDebug.put(userId, vadDebugStr);
-        String footer = buildVadDebugFooter(session);
+        String vadFieldContent = buildVadDebugFooter(session);
 
         MessageChannel channel = jda.getChannelById(MessageChannel.class, session.textChannelId);
         if (channel == null || session.embedMsgId == null) return;
@@ -492,11 +493,16 @@ public class CaptionsManager extends ListenerAdapter {
                     .setTitle(existingEmbed.getTitle())
                     .setDescription(existingEmbed.getDescription())
                     .setColor(existingEmbed.getColor())
-                    .setFooter(footer.length() > 2048 ? footer.substring(0, 2045) + "..." : footer);
+                    .setFooter(existingEmbed.getFooter() != null ? existingEmbed.getFooter().getText() : "Powered by Groq");
+
+            // Add VAD failures as a field (supports Markdown)
+            if (!session.userVadDebug.isEmpty()) {
+                eb.addField("debug", vadFieldContent.length() > 1024 ? vadFieldContent.substring(0, 1021) + "..." : vadFieldContent, false);
+            }
 
             channel.editMessageEmbedsById(session.embedMsgId, eb.build()).queue(
                 null,
-                err -> logger.debug("Failed to update VAD debug footer: {}", err.getMessage())
+                err -> logger.debug("Failed to update VAD debug field: {}", err.getMessage())
             );
         }, err -> logger.debug("Failed to retrieve message for VAD debug update: {}", err.getMessage()));
     }
@@ -517,17 +523,18 @@ public class CaptionsManager extends ListenerAdapter {
             else if ("korean".equals(session.captionMode)) title = "whisper-large-v3 (Korean)";
             else if ("arabic".equals(session.captionMode)) title = "whisper-large-v3 (Arabic)";
 
-            // Build combined footer with VAD debug (only for rejected users) + Groq debug
-            String vadFooter = buildVadDebugFooter(session);
-            String fullDebugStr = vadFooter.equals("No VAD data") ? debugStr : vadFooter + " | " + debugStr;
-            if (fullDebugStr.length() > 2048) fullDebugStr = fullDebugStr.substring(0, 2045) + "...";
-
             String content = String.join("\n", session.userLogs);
             EmbedBuilder eb = new EmbedBuilder()
                     .setTitle(title)
                     .setDescription(content)
                     .setColor(Color.GREEN)
-                    .setFooter(fullDebugStr);
+                    .setFooter(debugStr);
+
+            // Add VAD failures as a field if any exist (supports Markdown formatting)
+            if (!session.userVadDebug.isEmpty()) {
+                String vadFieldContent = buildVadDebugFooter(session);
+                eb.addField("VAD Rejections", vadFieldContent.length() > 1024 ? vadFieldContent.substring(0, 1021) + "..." : vadFieldContent, false);
+            }
 
             MessageChannel channel = jda.getChannelById(MessageChannel.class, session.textChannelId);
             if (channel != null) {
