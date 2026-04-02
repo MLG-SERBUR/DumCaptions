@@ -275,13 +275,15 @@ public class CaptionsManager extends ListenerAdapter {
                 }
 
                 if (canRequest()) {
-                    // Pop from buffer
-                    boolean isHard = entry.state.priority == AudioBuffer.Priority.HARD_CUTOFF;
-                    // Retrieve last segment end time for timestamp-driven overlap
-                    double lastEndMs = session.lastUserSegmentEnd.getOrDefault(entry.userId, -1.0);
-                    List<byte[]> packets = entry.buf.pop(isHard, lastEndMs, entry.state.duration);
-                    if (packets.size() >= 25) {
-                        processChunk(session, entry.userId, packets);
+                // Pop from buffer
+                boolean isHard = entry.state.priority == AudioBuffer.Priority.HARD_CUTOFF;
+                // Retrieve last segment end time for timestamp-driven overlap
+                double lastEndMs = session.lastUserSegmentEnd.getOrDefault(entry.userId, -1.0);
+                List<byte[]> packets = entry.buf.pop(isHard, lastEndMs, entry.state.duration);
+                if (packets.size() >= 25) {
+                    // Capture overlap duration from the buffer (set during pop())
+                    double overlapMs = entry.buf.getLastRetainedOverlapMs();
+                    processChunk(session, entry.userId, packets, overlapMs);
                         consecutiveSubs.put(entry.userId, subs + 1);
                         dispatched = true;
                         break; // One dispatch per tick per session
@@ -329,7 +331,7 @@ public class CaptionsManager extends ListenerAdapter {
         return true;
     }
 
-    private void processChunk(VoiceSession session, long userId, List<byte[]> packets) {
+    private void processChunk(VoiceSession session, long userId, List<byte[]> packets, double overlapMs) {
         if (packets.size() < 25) return; // Ignore small clicks
 
         audioExecutor.submit(() -> {
@@ -418,7 +420,7 @@ public class CaptionsManager extends ListenerAdapter {
                 // Store the segment end time for timestamp-driven overlap on the next buffer
                 session.lastUserSegmentEnd.put(userId, result.lastSegmentEndMs);
                 
-                addCaption(session, displayName, displayText, overlapFooter, userId);
+                addCaption(session, displayName, displayText, overlapFooter, userId, overlapMs);
 
             } catch (Exception e) {
                 logger.error("Error processing audio chunk for user {}: {}", displayName, e.getMessage(), e);
@@ -645,9 +647,10 @@ public class CaptionsManager extends ListenerAdapter {
         }
     }
 
-    private void addCaption(VoiceSession session, String displayName, String text, String debugStr, long currentUserId) {
+    private void addCaption(VoiceSession session, String displayName, String text, String debugStr, long currentUserId, double overlapMs) {
         String queueDebug = getQueueDebug(session, currentUserId);
-        String footerText = debugStr + queueDebug;
+        String overlapStr = String.format(", ovlp=%.1fs", overlapMs / 1000.0);
+        String footerText = debugStr + overlapStr + queueDebug;
 
         synchronized (session.userLogs) {
             if (!sessions.containsKey(session.guildId)) return;

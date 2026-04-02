@@ -10,6 +10,8 @@ public class AudioBuffer {
     private final List<byte[]> packets = new ArrayList<>();
     private Instant firstPush = null;
     private Instant lastPush = null;
+    /** Duration of overlap packets retained (ms), set by pop(). */
+    private double lastRetainedOverlapMs = 0;
 
     public AudioBuffer(long ssrc) {
         this.ssrc = ssrc;
@@ -113,15 +115,18 @@ public class AudioBuffer {
                 packets.addAll(overlap);
                 // Reset firstPush to reflect the retained audio duration
                 firstPush = Instant.now().minusMillis(retainCount * 20L);
+                lastRetainedOverlapMs = retainCount * 20;
             } else {
                 packets.clear();
                 firstPush = null;
                 lastPush = null;
+                lastRetainedOverlapMs = 0;
             }
         } else {
             packets.clear();
             firstPush = null;
             lastPush = null;
+            lastRetainedOverlapMs = 0;
         }
 
         return p;
@@ -136,5 +141,12 @@ public class AudioBuffer {
      */
     public synchronized int getPacketCount() {
         return packets.size();
+    }
+
+    /**
+     * Returns the duration (ms) of overlap packets retained during the last pop() call.
+     */
+    public synchronized double getLastRetainedOverlapMs() {
+        return lastRetainedOverlapMs;
     }
 }
