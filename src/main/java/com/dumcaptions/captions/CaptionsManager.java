@@ -530,8 +530,7 @@ public class CaptionsManager extends ListenerAdapter {
         // The OR gate ensures that even a short buffer with clear speech gets through,
         // while the AND of frames+percentage guards against transients in longer buffers
         boolean isSpeech = hasEnoughSpeechFrames && hasEnoughPercentage && hasHighConfidence;
-        debug.append(" | decision: ").append(isSpeech ? "SPEECH" : "REJECT");
-        
+                
         return new VadStats(isSpeech, speechFrames, totalValidFrames, batch.maxAmplitude,
                            maxProbability, avgSpeechProbability, highConfidenceFrames,
                            debug.toString());
