@@ -155,16 +155,6 @@ public class GroqClient {
                     continue;
                 }
 
-                // Rule C: Hallucination filter
-                String cleanedText = filterHallucinations(seg.text);
-                if (cleanedText == null || cleanedText.isEmpty()) {
-                    logger.info("[{}] blacklist: '{} | {}'", userIdentifier, seg.text, segmentDebug(seg));
-                    blacklistedTexts.add(seg.text.trim());
-                    continue;
-                }
-
-                seg.text = cleanedText;
-
                 // Handle overlaps
                 if (validSegments.isEmpty()) {
                     validSegments.add(seg);
@@ -187,6 +177,18 @@ public class GroqClient {
                     } else {
                         validSegments.add(seg);
                     }
+                }
+            }
+
+            // Rule C: Entire Response Hallucination filter
+            // Only filter if BOTH conditions are met:
+            // 1. The original response from the API had exactly one segment.
+            // 2. Exactly one segment survived Rule A (no-speech) and Rule B (compression).
+            if (result.segments.size() == 1 && validSegments.size() == 1) {
+                String candidateText = validSegments.get(0).text;
+                if (filterHallucinations(candidateText) == null) {
+                    logger.info("[{}] BLACKLIST (Entire Response): '{}'", userIdentifier, candidateText.trim());
+                    return new GroqResult("", "");
                 }
             }
         }
