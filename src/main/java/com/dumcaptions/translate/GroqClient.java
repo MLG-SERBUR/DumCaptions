@@ -116,41 +116,42 @@ public class GroqClient {
         }
     }
 
+    /**
+     * Build a debug string for a single segment's quality metrics.
+     */
+    private String segmentDebug(GroqSegment seg) {
+        String noSpeechPart = String.format("no_speech: %.2f", seg.noSpeechProb);
+        if (seg.noSpeechProb > 0.2) noSpeechPart = "**" + noSpeechPart + "**";
+
+        String compPart = String.format("comp: %.2f", seg.compressionRatio);
+        if (seg.compressionRatio > 2.0) compPart = "**" + compPart + "**";
+
+        return String.format("%s, %s, logprob: %.2f", noSpeechPart, compPart, seg.avgLogprob);
+    }
+
     private GroqResult processSegments(GroqVerboseResponse result, String userIdentifier) {
         List<GroqSegment> validSegments = new ArrayList<>();
         List<String> mergedSegmentsList = new ArrayList<>();
         List<String> blacklistedTexts = new ArrayList<>();
-        String firstSegStats = "N/A";
 
         if (result.segments != null) {
             for (GroqSegment seg : result.segments) {
-                if (firstSegStats.equals("N/A")) {
-                    String noSpeechPart = String.format("no_speech: %.2f", seg.noSpeechProb);
-                    if (seg.noSpeechProb > 0.2) noSpeechPart = "**" + noSpeechPart + "**";
-                    
-                    String compPart = String.format("comp: %.2f", seg.compressionRatio);
-                    if (seg.compressionRatio > 2.0) compPart = "**" + compPart + "**";
-
-                    firstSegStats = String.format("%s, %s, logprob: %.2f", 
-                            noSpeechPart, compPart, seg.avgLogprob);
-                }
-
                 // Rule A: High no_speech probability
                 if (seg.noSpeechProb > 0.2) {
-                    logger.info("[{}] no_speech: '{}'", userIdentifier, seg.text);
+                    logger.info("[{}] no_speech: '{}' | {}", userIdentifier, seg.text, segmentDebug(seg));
                     continue;
                 }
 
                 // Rule B: High compression ratio (hallucination loops)
                 if (seg.compressionRatio > 2.0) {
-                    logger.info("[{}] high_comp: '{}'", userIdentifier, seg.text);
+                    logger.info("[{}] high_comp: '{}' | {}", userIdentifier, seg.text, segmentDebug(seg));
                     continue;
                 }
 
                 // Rule C: Hallucination filter
                 String cleanedText = filterHallucinations(seg.text);
                 if (cleanedText == null || cleanedText.isEmpty()) {
-                    logger.info("[{}] blacklist: '{}'", userIdentifier, seg.text);
+                    logger.info("[{}] blacklist: '{} | {}'", userIdentifier, seg.text, segmentDebug(seg));
                     blacklistedTexts.add(seg.text.trim());
                     continue;
                 }
@@ -194,29 +195,24 @@ public class GroqClient {
         String resultText = finalText.toString().trim();
 
         if (count > 0) {
-            logger.info("[{}] {} seg: \"{}\"", userIdentifier, count, resultText);
+            logger.info("[{}] \"{}\"", userIdentifier, resultText);
             for (int i = 0; i < validSegments.size(); i++) {
                 GroqSegment seg = validSegments.get(i);
-                logger.info("[{}]   #{} [{}-{}s] '{}'", 
-                        userIdentifier, (i + 1), String.format("%.2f", seg.start), String.format("%.2f", seg.end), seg.text);
+                logger.info("[{}]   #{} [{}-{}s] '{}' | {}",
+                        userIdentifier, (i + 1), String.format("%.2f", seg.start), String.format("%.2f", seg.end),
+                        seg.text, segmentDebug(seg));
             }
         }
-        
+
         if (mergedCount > 0) {
             logger.info("[{}] merged {}: {}", userIdentifier, mergedCount, String.join(" | ", mergedSegmentsList));
         }
 
-        StringBuilder debugStrBuilder = new StringBuilder();
-        if (mergedCount > 0) {
-            debugStrBuilder.append(String.format("Merged: %d | ", mergedCount));
-        }
-        debugStrBuilder.append(firstSegStats);
-        
         if (!blacklistedTexts.isEmpty()) {
-            debugStrBuilder.append(" | **Blacklisted: ").append(String.join(", ", blacklistedTexts)).append("**");
+            logger.info("[{}] **Blacklisted: {}**", userIdentifier, String.join(", ", blacklistedTexts));
         }
 
-        return new GroqResult(resultText, debugStrBuilder.toString());
+        return new GroqResult(resultText, "");
     }
 
     private String filterHallucinations(String text) {

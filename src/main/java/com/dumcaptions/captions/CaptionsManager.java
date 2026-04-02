@@ -381,7 +381,7 @@ public class CaptionsManager extends ListenerAdapter {
                 
                 if (text.isEmpty()) {
                     // API returned empty - log debug info to console
-                    logger.info("API empty for {} VAD: {} | Groq: {}", displayName, stats.debugReason, result.debugStr);
+                    logger.info("API empty for {} VAD: {}", displayName, stats.debugReason);
                     
                     // API Incrementing logic
                     float newThreshold = Math.min(CaptionsConfig.VAD_MAX_THRESHOLD, vadThreshold + CaptionsConfig.VAD_STEP_UP);
@@ -395,6 +395,7 @@ public class CaptionsManager extends ListenerAdapter {
                 // Check for overlap with the previous caption from this user
                 String previousText = session.lastUserText.get(userId);
                 String displayText = text;
+                String overlapFooter = ""; // Track overlap info for footer
                 if (previousText != null && !previousText.isEmpty()) {
                     String overlapResult = resolveOverlap(previousText, text);
                     if (overlapResult == null) {
@@ -405,12 +406,13 @@ public class CaptionsManager extends ListenerAdapter {
                     }
                     displayText = overlapResult;
                     if (!displayText.equals(text) && !displayText.isEmpty()) {
+                        overlapFooter = String.format("overlap_trim: '%s'→'%s'", text.trim(), displayText.trim());
                         logger.info("OVERLAP TRIM {} '{}' -> '{}'", displayName, text, displayText);
                     }
                 }
 
                 session.lastUserText.put(userId, displayText);
-                addCaption(session, displayName, displayText, result.debugStr, userId);
+                addCaption(session, displayName, displayText, overlapFooter, userId);
 
             } catch (Exception e) {
                 logger.error("Error processing audio chunk for user {}: {}", displayName, e.getMessage(), e);
