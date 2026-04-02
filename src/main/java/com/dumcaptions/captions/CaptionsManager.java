@@ -344,7 +344,7 @@ public class CaptionsManager extends ListenerAdapter {
                 }
 
                 // VAD Filtering - fixed threshold, probability-based decision
-                VadStats stats = calculateVad(packets);
+                VadStats stats = calculateVad(packets, overlapMs);
                 
                 if (!stats.isSpeech) {
                     logger.info("VAD REJECT {}: {}", displayName, stats.debugReason);
@@ -435,7 +435,7 @@ public class CaptionsManager extends ListenerAdapter {
      * 2. At least MIN_HIGH_CONFIDENCE_FRAMES above HIGH_CONFIDENCE_THRESHOLD (quality gate)
      * 3. Speech frames >= MIN_SPEECH_PERCENTAGE of total (sustained presence)
      */
-    private VadStats calculateVad(List<byte[]> packets) throws Exception {
+    private VadStats calculateVad(List<byte[]> packets, double overlapMs) throws Exception {
         List<short[]> decodedFrames = new ArrayList<>();
         int maxAmplitude = 0;
         int totalValidFrames = 0;
@@ -444,7 +444,11 @@ public class CaptionsManager extends ListenerAdapter {
         short[] pcm = new short[5760]; 
         int errorCount = 0;
         
+        // Calculate how many packets at the start are overlap carryover from previous chunk
+        int overlapPacketCount = (int) Math.ceil(overlapMs / 20.0);
+        
         for (int i = 0; i < packets.size(); i++) {
+            boolean isOverlapPacket = i < overlapPacketCount;
             byte[] opus = packets.get(i);
             
             if (opus == null || opus.length < 5) {
@@ -481,11 +485,13 @@ public class CaptionsManager extends ListenerAdapter {
                         tocInfo = String.format("TOC[config=%d, s=%d, c=%d]", config, s, c);
                     }
 
+                    String overlapPrefix = isOverlapPacket ? "[OVERLAP] " : "";
+                    
                     if (errorCount == 1) {
-                        logger.debug("First Opus decoder error in chunk (packet {}/{}): {}", i, packets.size(), e.getMessage());
+                        logger.debug("{}First Opus decoder error in chunk (packet {}/{}): {}", overlapPrefix, i, packets.size(), e.getMessage());
                     } else {
-                        logger.warn("Opus decoder error rate high ({}/{} - {}%): Last error at packet {}: {}. Hex(8): {} | {}", 
-                            errorCount, packets.size(), (int)(errorRate * 100), i, e.getMessage(), hex.toString().trim(), tocInfo);
+                        logger.warn("{}Opus decoder error rate high ({}/{} - {}%): Last error at packet {}: {}. Hex(8): {} | {}", 
+                            overlapPrefix, errorCount, packets.size(), (int)(errorRate * 100), i, e.getMessage(), hex.toString().trim(), tocInfo);
                     }
                 }
             }
