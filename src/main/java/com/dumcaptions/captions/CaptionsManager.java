@@ -52,7 +52,8 @@ public class CaptionsManager extends ListenerAdapter {
     private final Map<String, Map<Long, Integer>> userConsecutiveSubmissions = new ConcurrentHashMap<>();
     
     // Processing state
-    private final java.util.concurrent.atomic.AtomicBoolean processingInFlight = new java.util.concurrent.atomic.AtomicBoolean(false);
+    private final java.util.concurrent.atomic.AtomicBoolean groqProcessingInFlight = new java.util.concurrent.atomic.AtomicBoolean(false);
+    private final BlockingQueue<GroqSubmission> groqQueue = new LinkedBlockingQueue<>();
 
     // Shaping constants
     private static final long AGING_BOOST_MS = 5000;  // Every 5s of waiting, boost priority by 1
@@ -62,9 +63,10 @@ public class CaptionsManager extends ListenerAdapter {
     public CaptionsManager(JDA jda, GroqClient groq) {
         this.jda = jda;
         this.groq = groq;
-        
-        // Start the ticker for processing buffers
+
+        // Start the ticker for processing buffers and the groq queue
         scheduler.scheduleAtFixedRate(this::checkBuffers, 200, 200, TimeUnit.MILLISECONDS);
+        scheduler.scheduleAtFixedRate(this::processGroqQueue, 200, 200, TimeUnit.MILLISECONDS);
     }
 
     public static class VoiceSession {
@@ -263,19 +265,12 @@ public class CaptionsManager extends ListenerAdapter {
                 );
             });
 
-            // Dispatch one entry at a time, respecting rate limit and fairness.
-            // We stop after dispatching one per tick to avoid one user monopolizing
-            // when multiple users have ready buffers.
+            // Dispatch all ready users to VAD analysis immediately
             boolean dispatched = false;
             for (QueueEntry entry : ready) {
                 int subs = consecutiveSubs.getOrDefault(entry.userId, 0);
                 if (subs >= MAX_CONSECUTIVE_PER_TICK) {
                     continue; // Skip this user for now, give others a turn
-                }
-
-                // Check rate limit and processing lock
-                if (processingInFlight.get() || isRateLimited()) {
-                    break; // Rate limited or already processing, don't dispatch this tick
                 }
 
                 // Pop from buffer
@@ -287,16 +282,13 @@ public class CaptionsManager extends ListenerAdapter {
                     // Capture overlap duration from the buffer (set during pop())
                     double overlapMs = entry.buf.getLastRetainedOverlapMs();
                     
-                    processingInFlight.set(true);
-                    processChunk(session, entry.userId, packets, overlapMs);
+                    analyzeVadAndQueue(session, entry.userId, packets, overlapMs);
                     
                     consecutiveSubs.put(entry.userId, subs + 1);
                     dispatched = true;
-                    break; // One dispatch per tick per session
                 } else {
                     // Too small, clear without processing
                     consecutiveSubs.put(entry.userId, 0);
-                    continue;
                 }
             }
 
@@ -334,12 +326,63 @@ public class CaptionsManager extends ListenerAdapter {
         nextReqTime.set(System.currentTimeMillis() + CaptionsConfig.RATE_LIMIT_INTERVAL_MS);
     }
 
-    private void processChunk(VoiceSession session, long userId, List<byte[]> packets, double overlapMs) {
-        if (packets.size() < 25) {
-            processingInFlight.set(false);
-            return;
-        }
+    private void processGroqQueue() {
+        if (groqProcessingInFlight.get() || isRateLimited()) return;
+        
+        GroqSubmission submission = groqQueue.poll();
+        if (submission == null) return;
 
+        groqProcessingInFlight.set(true);
+        audioExecutor.submit(() -> {
+            try {
+                // Now we are in the rate-limited transcription stage
+                markRequestSent();
+
+                // Wrap in OGG
+                byte[] oggData = OggOpusWriter.write(submission.packets);
+                
+                String lastText = submission.session.lastUserText.get(submission.userId);
+                String captionMode = submission.session.captionMode;
+                GroqClient.GroqResult result = groq.translateAudio(oggData, "audio.ogg", lastText, captionMode, submission.displayName, CaptionsConfig.VAD_THRESHOLD);
+                
+                String text = result.text.trim();
+                if (text.isEmpty()) {
+                    logger.info("API empty for {} VAD: {}", submission.displayName, submission.stats.debugReason);
+                    return;
+                }
+
+                // Overlap resolution
+                String previousText = submission.session.lastUserText.get(submission.userId);
+                String displayText = text;
+                String overlapFooter = "";
+                if (previousText != null && !previousText.isEmpty()) {
+                    String overlapResult = resolveOverlap(previousText, text);
+                    if (overlapResult == null) {
+                        logger.info("OVERLAP SKIP {} (contained in last): '{}'", submission.displayName, text);
+                        submission.session.lastUserText.put(submission.userId, previousText);
+                        return;
+                    }
+                    displayText = overlapResult;
+                    if (!displayText.equals(text) && !displayText.trim().isEmpty()) {
+                        overlapFooter = String.format("overlap_trim: '%s'->'%s'", text.trim(), displayText.trim());
+                        logger.info("OVERLAP TRIM {} '{}' -> '{}'", submission.displayName, text, displayText);
+                    }
+                }
+
+                submission.session.lastUserText.put(submission.userId, displayText);
+                submission.session.lastUserSegmentEnd.put(submission.userId, result.lastSegmentEndMs);
+                
+                addCaption(submission.session, submission.displayName, displayText, overlapFooter, submission.userId, submission.overlapMs);
+
+            } catch (Exception e) {
+                logger.error("Error in Groq worker for {}: {}", submission.displayName, e.getMessage(), e);
+            } finally {
+                groqProcessingInFlight.set(false);
+            }
+        });
+    }
+
+    private void analyzeVadAndQueue(VoiceSession session, long userId, List<byte[]> packets, double overlapMs) {
         audioExecutor.submit(() -> {
             String displayName = "Unknown (" + userId + ")";
             try {
@@ -353,7 +396,7 @@ public class CaptionsManager extends ListenerAdapter {
                     }
                 }
 
-                // VAD Filtering - fixed threshold, probability-based decision
+                // VAD Filtering - fixed threshold, zero-latency (not gated by rate limit)
                 VadStats stats = calculateVad(packets, overlapMs);
                 
                 if (!stats.isSpeech) {
@@ -361,56 +404,32 @@ public class CaptionsManager extends ListenerAdapter {
                     return;
                 }
                 
-                // Passed VAD - commit the rate-limit slot
+                // Passed VAD - Queue for Groq transcription
                 logger.info("VAD PASS {}: {}", displayName, stats.debugReason);
-                markRequestSent();
-
-                // Wrap in OGG
-                byte[] oggData = OggOpusWriter.write(packets);
-                
-                String lastText = session.lastUserText.get(userId);
-                GroqClient.GroqResult result = groq.translateAudio(oggData, "audio.ogg", lastText, session.captionMode, displayName, CaptionsConfig.VAD_THRESHOLD);
-                
-                String text = result.text.trim();
-                
-                if (text.isEmpty()) {
-                    // API returned empty - log debug info
-                    logger.info("API empty for {} VAD: {}", displayName, stats.debugReason);
-                    return;
-                }
-
-                // Check for overlap with the previous caption from this user
-                String previousText = session.lastUserText.get(userId);
-                String displayText = text;
-                String overlapFooter = "";
-                if (previousText != null && !previousText.isEmpty()) {
-                    String overlapResult = resolveOverlap(previousText, text);
-                    if (overlapResult == null) {
-                        // New text is fully contained in previous caption — skip
-                        logger.info("OVERLAP SKIP {} (contained in last): '{}'", displayName, text);
-                        session.lastUserText.put(userId, previousText);
-                        return;
-                    }
-                    displayText = overlapResult;
-                    if (!displayText.equals(text) && !displayText.trim().isEmpty()) {
-                        overlapFooter = String.format("overlap_trim: '%s'->'%s'", text.trim(), displayText.trim());
-                        logger.info("OVERLAP TRIM {} '{}' -> '{}'", displayName, text, displayText);
-                    }
-                }
-
-                session.lastUserText.put(userId, displayText);
-                
-                // Store the segment end time for timestamp-driven overlap on the next buffer
-                session.lastUserSegmentEnd.put(userId, result.lastSegmentEndMs);
-                
-                addCaption(session, displayName, displayText, overlapFooter, userId, overlapMs);
+                groqQueue.offer(new GroqSubmission(session, userId, displayName, packets, overlapMs, stats));
 
             } catch (Exception e) {
-                logger.error("Error processing audio chunk for user {}: {}", displayName, e.getMessage(), e);
-            } finally {
-                processingInFlight.set(false);
+                logger.error("Error analyzing VAD for user {}: {}", displayName, e.getMessage(), e);
             }
         });
+    }
+
+    private static class GroqSubmission {
+        final VoiceSession session;
+        final long userId;
+        final String displayName;
+        final List<byte[]> packets;
+        final double overlapMs;
+        final VadStats stats;
+
+        GroqSubmission(VoiceSession session, long userId, String displayName, List<byte[]> packets, double overlapMs, VadStats stats) {
+            this.session = session;
+            this.userId = userId;
+            this.displayName = displayName;
+            this.packets = packets;
+            this.overlapMs = overlapMs;
+            this.stats = stats;
+        }
     }
 
     /**
