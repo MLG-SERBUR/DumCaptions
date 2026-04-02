@@ -206,7 +206,6 @@ public class GroqClient {
         String resultText = finalText.toString().trim();
 
         if (count > 0) {
-            logger.info("[{}] \"{}\"", userIdentifier, resultText);
             for (int i = 0; i < validSegments.size(); i++) {
                 GroqSegment seg = validSegments.get(i);
                 logger.info("[{}]   #{} [{}-{}s] '{}' | {}",
