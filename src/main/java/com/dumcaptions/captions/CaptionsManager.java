@@ -64,7 +64,6 @@ public class CaptionsManager extends ListenerAdapter {
         public final Map<Long, Integer> userVadDroppedSequential = new ConcurrentHashMap<>();
         public final Map<Long, Boolean> userHasPassedVad = new ConcurrentHashMap<>();
         public final Map<Long, Double> userNoiseFloor = new ConcurrentHashMap<>();  // Track per-user noise floor
-        public final Map<Long, String> userVadDebug = new ConcurrentHashMap<>();  // Track per-user VAD debug info
         public String embedMsgId;
         public String captionMode = "english";
 
@@ -243,9 +242,6 @@ public class CaptionsManager extends ListenerAdapter {
                 
                 if (!stats.isSpeech) {
                     logger.info("VAD REJECT {}: {}", displayName, stats.debugReason);
-                    
-                    // Update embed footer with VAD rejection info
-                    updateVadDebug(session, userId, displayName + ": " + stats.debugReason);
                         
                     // VAD Lowering Logic
                     if (stats.maxAmplitude > 500 || packets.size() > 50) {
@@ -277,9 +273,8 @@ public class CaptionsManager extends ListenerAdapter {
                 String text = result.text.trim();
                 
                 if (text.isEmpty()) {
-                    // API returned empty - show VAD debug + Groq debug as post-filter rejection
-                    String vadDebugStr = displayName + " VAD: " + stats.debugReason + " | " + result.debugStr;
-                    updateVadDebug(session, userId, vadDebugStr);
+                    // API returned empty - log debug info to console
+                    logger.info("API empty for {} VAD: {} | Groq: {}", displayName, stats.debugReason, result.debugStr);
                     
                     // API Incrementing logic
                     float newThreshold = Math.min(CaptionsConfig.VAD_MAX_THRESHOLD, vadThreshold + CaptionsConfig.VAD_STEP_UP);
@@ -291,8 +286,6 @@ public class CaptionsManager extends ListenerAdapter {
                 }
 
                 session.lastUserText.put(userId, text);
-                // Successful caption - remove VAD debug from footer
-                session.userVadDebug.remove(userId);
                 addCaption(session, displayName, text, result.debugStr);
 
             } catch (Exception e) {
@@ -461,48 +454,6 @@ public class CaptionsManager extends ListenerAdapter {
         return new VadStats(isSpeech, speechFramesLowThreshold, totalValidFrames, maxAmplitude, normalizedScore, debug.toString());
     }
 
-    /**
-     * Build combined VAD debug footer from all users.
-     */
-    private String buildVadDebugFooter(VoiceSession session) {
-        if (session.userVadDebug.isEmpty()) return "No VAD data";
-        return String.join("\n", session.userVadDebug.values());
-    }
-
-    /**
-     * Update embed with VAD debug info (used for rejections).
-     * Uses a field for VAD failures to support Markdown formatting.
-     */
-    private void updateVadDebug(VoiceSession session, long userId, String vadDebugStr) {
-        session.userVadDebug.put(userId, vadDebugStr);
-        String vadFieldContent = buildVadDebugFooter(session);
-
-        MessageChannel channel = jda.getChannelById(MessageChannel.class, session.textChannelId);
-        if (channel == null || session.embedMsgId == null) return;
-
-        channel.retrieveMessageById(session.embedMsgId).queue(msg -> {
-            if (!sessions.containsKey(session.guildId)) return;
-            if (msg.getEmbeds().isEmpty()) return;
-
-            var existingEmbed = msg.getEmbeds().get(0);
-            EmbedBuilder eb = new EmbedBuilder()
-                    .setTitle(existingEmbed.getTitle())
-                    .setDescription(existingEmbed.getDescription())
-                    .setColor(existingEmbed.getColor())
-                    .setFooter(existingEmbed.getFooter() != null ? existingEmbed.getFooter().getText() : "Powered by Groq");
-
-            // Add VAD failures as a field (supports Markdown)
-            if (!session.userVadDebug.isEmpty()) {
-                eb.addField("Debug", vadFieldContent.length() > 1024 ? vadFieldContent.substring(0, 1021) + "..." : vadFieldContent, false);
-            }
-
-            channel.editMessageEmbedsById(session.embedMsgId, eb.build()).queue(
-                null,
-                err -> logger.debug("Failed to update VAD debug field: {}", err.getMessage())
-            );
-        }, err -> logger.debug("Failed to retrieve message for VAD debug update: {}", err.getMessage()));
-    }
-
     private void addCaption(VoiceSession session, String displayName, String text, String debugStr) {
         synchronized (session.userLogs) {
             if (!sessions.containsKey(session.guildId)) return;
@@ -526,12 +477,6 @@ public class CaptionsManager extends ListenerAdapter {
                     .setColor(Color.GREEN)
                     .setFooter(debugStr);
 
-            // Add VAD failures as a field if any exist (supports Markdown formatting)
-            if (!session.userVadDebug.isEmpty()) {
-                String vadFieldContent = buildVadDebugFooter(session);
-                eb.addField("debug", vadFieldContent.length() > 1024 ? vadFieldContent.substring(0, 1021) + "..." : vadFieldContent, false);
-            }
-
             MessageChannel channel = jda.getChannelById(MessageChannel.class, session.textChannelId);
             if (channel != null) {
                 channel.getHistoryAfter(session.embedMsgId, 6).queue(history -> {
@@ -552,15 +497,15 @@ public class CaptionsManager extends ListenerAdapter {
                                         }
                                         session.embedMsgId = msg.getId();
                                     },
-                                    err -> logger.error("Failed to send new captions message for {}: {}", displayName, err.getMessage())
+                                    err -> logger.error("Failed to send new captions message for {}: {}", displayName, err.getMessage(), err)
                                 );
                     } else {
                         channel.editMessageEmbedsById(session.embedMsgId, eb.build()).queue(
                             null,
-                            err -> logger.error("Failed to edit captions message for {}: {}", displayName, err.getMessage())
+                            err -> logger.error("Failed to edit captions message for {}: {}", displayName, err.getMessage(), err)
                         );
                     }
-                }, err -> logger.error("Failed to fetch message history: {}", err.getMessage()));
+                }, err -> logger.error("Failed to fetch message history: {}", err.getMessage(), err));
             } else {
                 logger.error("Failed to resolve channel ID {} as MessageChannel", session.textChannelId);
             }
@@ -588,7 +533,7 @@ public class CaptionsManager extends ListenerAdapter {
                 )
         ).queue(
             success -> logger.info("Successfully registered /captions command"),
-            error -> logger.error("Failed to register /captions command: {}", error.getMessage())
+            error -> logger.error("Failed to register /captions command: {}", error.getMessage(), error)
         );
     }
 }
