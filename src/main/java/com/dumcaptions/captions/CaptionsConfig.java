@@ -17,18 +17,11 @@ public class CaptionsConfig {
     
     // TEN-VAD parameters
     public static final int VAD_FRAME_SIZE = 960;               // 20ms at 48kHz
-    public static final float VAD_MAX_THRESHOLD = 0.5f;
-    public static final float VAD_MIN_THRESHOLD = 0.1f;
-    public static final float VAD_STEP_UP = 0.05f;
-    public static final float VAD_STEP_DOWN = 0.1f;
-    public static final double MIN_SPEECH_PERCENTAGE = 0.05;    // Drop if < 5% speech
-    
-    // Noise floor and hysteresis parameters
-    public static final double NOISE_FLOOR_ALPHA = 0.02;        // Slow EMA for noise floor (very stable)
-    public static final int CONSECUTIVE_SPEECH_FRAMES = 3;      // Require 3 consecutive speech frames to start
-    public static final float HYSTERESIS_START_BONUS = 0.05f;   // Higher threshold to START speech
-    public static final float HYSTERESIS_CONTINUE_BONUS = -0.05f; // Lower threshold to CONTINUE speech
-    public static final int MIN_CONSECUTIVE_FOR_TRIGGER = 4;    // Need 4+ consecutive frames to trigger isSpeech
+    public static final float VAD_THRESHOLD = 0.5f;             // Fixed threshold - TenVAD's recommended default
+    public static final double MIN_SPEECH_PERCENTAGE = 0.05;    // Drop if < 5% of frames are speech
+    public static final int MIN_SPEECH_FRAMES = 2;              // Require at least 2 speech frames (transient guard)
+    public static final float HIGH_CONFIDENCE_THRESHOLD = 0.7f; // Frames above this are "confident speech"
+    public static final double MIN_HIGH_CONFIDENCE_FRAMES = 1;  // At least 1 high-confidence frame needed
     
     // Overlap management
     public static final int OVERLAP_PACKETS = 50;               // Fallback: 1 second (50 * 20ms)
