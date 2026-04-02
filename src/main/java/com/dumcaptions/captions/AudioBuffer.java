@@ -23,43 +23,54 @@ public class AudioBuffer {
         lastPush = Instant.now();
     }
 
-    public static class ShouldProcessResult {
-        public final boolean shouldProcess;
-        public final boolean isHardCutoff;
-        public final boolean isStale;
-
-        public ShouldProcessResult(boolean shouldProcess, boolean isHardCutoff, boolean isStale) {
-            this.shouldProcess = shouldProcess;
-            this.isHardCutoff = isHardCutoff;
-            this.isStale = isStale;
-        }
-    }
-
-    public synchronized ShouldProcessResult shouldProcess() {
+    /**
+     * Returns the current state of this buffer for the queue to evaluate.
+     * @return a ReadyState if this buffer should be processed, null otherwise.
+     */
+    public synchronized ReadyState getReadiness() {
         if (packets.isEmpty()) {
-            return new ShouldProcessResult(false, false, false);
+            return null;
         }
 
         Instant now = Instant.now();
         long duration = java.time.Duration.between(firstPush, now).toMillis();
         long silence = java.time.Duration.between(lastPush, now).toMillis();
 
-        // 1. Hard Cutoff
+        // Hard cutoff: buffer has been running too long, process immediately
         if (duration > CaptionsConfig.HARD_CUTOFF_THRESHOLD_MS) {
-            return new ShouldProcessResult(true, true, false);
+            return new ReadyState(Priority.HARD_CUTOFF, duration, silence);
         }
 
-        // 2. Stale Data
-        if (silence > CaptionsConfig.STALE_DATA_THRESHOLD_MS) {
-            return new ShouldProcessResult(true, false, true);
-        }
-
-        // 3. Natural Silence
+        // Silence-triggered: natural pause detected, ready to process
         if (silence > CaptionsConfig.NATURAL_SILENCE_THRESHOLD_MS) {
-            return new ShouldProcessResult(true, false, false);
+            return new ReadyState(Priority.SILENCE, duration, silence);
         }
 
-        return new ShouldProcessResult(false, false, false);
+        return null; // Still building
+    }
+
+    /**
+     * Priority levels for the shaped queue. Higher ordinal = more urgent.
+     */
+    public enum Priority {
+        SILENCE(0),   // Natural pause in speech
+        QUEUED(1),    // Been waiting in queue
+        HARD_CUTOFF(2); // Buffer exceeded max duration
+
+        public final int level;
+        Priority(int level) { this.level = level; }
+    }
+
+    public static class ReadyState {
+        public final Priority priority;
+        public final long duration;
+        public final long silenceMs;
+
+        public ReadyState(Priority priority, long duration, long silenceMs) {
+            this.priority = priority;
+            this.duration = duration;
+            this.silenceMs = silenceMs;
+        }
     }
 
     public synchronized List<byte[]> pop(boolean isHardCutoff) {
@@ -82,5 +93,12 @@ public class AudioBuffer {
     
     public long getSsrc() {
         return ssrc;
+    }
+
+    /**
+     * Returns the current number of buffered packets.
+     */
+    public synchronized int getPacketCount() {
+        return packets.size();
     }
 }

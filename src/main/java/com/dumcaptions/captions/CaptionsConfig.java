@@ -12,9 +12,8 @@ public class CaptionsConfig {
     public static final long RATE_LIMIT_INTERVAL_MS = 3000;
     
     // Audio processing thresholds
-    public static final long STALE_DATA_THRESHOLD_MS = 6000;    // Forced process after 6s silence
     public static final long NATURAL_SILENCE_THRESHOLD_MS = 1000; // Natural break after 1s silence
-    public static final long HARD_CUTOFF_THRESHOLD_MS = 30000;   // Maximum length of 30s
+    public static final long HARD_CUTOFF_THRESHOLD_MS = 10000;   // Maximum buffer length of 10s
     
     // TEN-VAD parameters
     public static final int VAD_FRAME_SIZE = 960;               // 20ms at 48kHz

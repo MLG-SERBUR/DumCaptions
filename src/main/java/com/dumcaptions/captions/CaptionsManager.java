@@ -46,6 +46,14 @@ public class CaptionsManager extends ListenerAdapter {
     private final ExecutorService audioExecutor = Executors.newFixedThreadPool(4);
     private final AtomicLong nextReqTime = new AtomicLong(0);
 
+    // Per-guild queue fairness: track how many consecutive submissions per sessionId
+    // Key = guildId, Value = map of userId -> consecutive count since last submission
+    private final Map<String, Map<Long, Integer>> userConsecutiveSubmissions = new ConcurrentHashMap<>();
+
+    // Shaping constants
+    private static final long AGING_BOOST_MS = 5000;  // Every 5s of waiting, boost priority by 1
+    private static final int MAX_CONSECUTIVE_PER_TICK = 1; // Max submissions per buffer per tick (fairness)
+
     public CaptionsManager(JDA jda, GroqClient groq) {
         this.jda = jda;
         this.groq = groq;
@@ -195,21 +203,116 @@ public class CaptionsManager extends ListenerAdapter {
         }
     }
 
+    /**
+     * Check all active sessions for buffers that are ready to process.
+     * Builds a shaped priority queue per session:
+     *   - Hard-cutoff buffers always go first
+     *   - Queue aging prevents starvation (older buffers get boosted)
+     *   - Fairness shaping: a single talkative user won't monopolize the queue
+     *     when others are also waiting
+     */
     private void checkBuffers() {
         for (VoiceSession session : sessions.values()) {
+            // Build a list of ready entries with their computed queue priority
+            List<QueueEntry> ready = new ArrayList<>();
+            Map<Long, Integer> consecutiveSubs = userConsecutiveSubmissions.computeIfAbsent(
+                    session.guildId, k -> new ConcurrentHashMap<>());
+
             for (Map.Entry<Long, AudioBuffer> entry : session.userAudio.entrySet()) {
-                long ssrc = entry.getKey();
+                long userId = entry.getKey();
                 AudioBuffer buf = entry.getValue();
-                
-                AudioBuffer.ShouldProcessResult res = buf.shouldProcess();
-                if (res.shouldProcess) {
-                    if (res.isHardCutoff || res.isStale) {
-                        processChunk(session, ssrc, buf.pop(res.isHardCutoff));
-                    } else if (canRequest()) {
-                        processChunk(session, ssrc, buf.pop(false));
+                AudioBuffer.ReadyState state = buf.getReadiness();
+                if (state == null) continue;
+
+                // Compute shaped priority: base priority + aging bonus
+                int basePriority;
+                if (state.priority == AudioBuffer.Priority.HARD_CUTOFF) {
+                    basePriority = 100; // Always top
+                } else {
+                    // SILENCE priority: lower number = quieter/shorter buffer, but
+                    // aging adds to this so long-waiting buffers rise
+                    basePriority = 1;
+                }
+                long agingBonus = state.duration / AGING_BOOST_MS;
+                int effectivePriority = basePriority + (int)agingBonus;
+
+                ready.add(new QueueEntry(userId, buf, effectivePriority, state));
+            }
+
+            if (ready.isEmpty()) continue;
+
+            // Sort: highest effective priority first, then break ties by userId (round-robin hint)
+            ready.sort((a, b) -> {
+                // Hard cutoff always wins
+                if (a.state.priority == AudioBuffer.Priority.HARD_CUTOFF &&
+                    b.state.priority != AudioBuffer.Priority.HARD_CUTOFF) return -1;
+                if (b.state.priority == AudioBuffer.Priority.HARD_CUTOFF &&
+                    a.state.priority != AudioBuffer.Priority.HARD_CUTOFF) return 1;
+
+                // For non-hard-cutoff entries, compare aging: longer wait wins
+                int cmp = Integer.compare(b.effectivePriority, a.effectivePriority);
+                if (cmp != 0) return cmp;
+
+                // Tie-break: prefer users with fewer consecutive submissions (fairness)
+                return Integer.compare(
+                    consecutiveSubs.getOrDefault(a.userId, 0),
+                    consecutiveSubs.getOrDefault(b.userId, 0)
+                );
+            });
+
+            // Dispatch one entry at a time, respecting rate limit and fairness.
+            // We stop after dispatching one per tick to avoid one user monopolizing
+            // when multiple users have ready buffers.
+            boolean dispatched = false;
+            for (QueueEntry entry : ready) {
+                int subs = consecutiveSubs.getOrDefault(entry.userId, 0);
+                if (subs >= MAX_CONSECUTIVE_PER_TICK) {
+                    continue; // Skip this user for now, give others a turn
+                }
+
+                if (canRequest()) {
+                    // Pop from buffer
+                    boolean isHard = entry.state.priority == AudioBuffer.Priority.HARD_CUTOFF;
+                    List<byte[]> packets = entry.buf.pop(isHard);
+                    if (packets.size() >= 25) {
+                        processChunk(session, entry.userId, packets);
+                        consecutiveSubs.put(entry.userId, subs + 1);
+                        dispatched = true;
+                        break; // One dispatch per tick per session
+                    } else {
+                        // Too small, clear without processing
+                        consecutiveSubs.put(entry.userId, 0);
+                        continue;
                     }
+                } else {
+                    // Rate limited, don't dispatch, will try next tick
+                    break;
                 }
             }
+
+            // If nothing was dispatched this tick (not due to rate limits),
+            // reset the counter for fairness
+            if (!dispatched) {
+                boolean noRateLimit = nextReqTime.get() <= System.currentTimeMillis();
+                if (noRateLimit) {
+                    consecutiveSubs.replaceAll((uid, val) -> 0);
+                }
+            }
+        }
+    }
+
+    // Helper record for the queue
+    private static class QueueEntry {
+        final long userId;
+        final AudioBuffer buf;
+        final int effectivePriority;
+        final AudioBuffer.ReadyState state;
+
+        QueueEntry(long userId, AudioBuffer buf, int effectivePriority, AudioBuffer.ReadyState state) {
+            this.userId = userId;
+            this.buf = buf;
+            this.effectivePriority = effectivePriority;
+            this.state = state;
         }
     }
 
@@ -286,7 +389,7 @@ public class CaptionsManager extends ListenerAdapter {
                 }
 
                 session.lastUserText.put(userId, text);
-                addCaption(session, displayName, text, result.debugStr);
+                addCaption(session, displayName, text, result.debugStr, userId);
 
             } catch (Exception e) {
                 logger.error("Error processing audio chunk for user {}: {}", displayName, e.getMessage(), e);
@@ -454,7 +557,69 @@ public class CaptionsManager extends ListenerAdapter {
         return new VadStats(isSpeech, speechFramesLowThreshold, totalValidFrames, maxAmplitude, normalizedScore, debug.toString());
     }
 
-    private void addCaption(VoiceSession session, String displayName, String text, String debugStr) {
+    /**
+     * Returns a debug string about currently queued buffers for the session.
+     * Shows each queued user with their display name, buffer size (packet count),
+     * and how long they've been waiting in seconds.
+     */
+    private String getQueueDebug(VoiceSession session, long currentUserId) {
+        List<QueuedUserDebug> queued = new ArrayList<>();
+
+        for (Map.Entry<Long, AudioBuffer> entry : session.userAudio.entrySet()) {
+            long userId = entry.getKey();
+            if (userId == currentUserId) continue;
+            AudioBuffer buf = entry.getValue();
+            AudioBuffer.ReadyState state = buf.getReadiness();
+            if (state == null) continue;
+
+            // Get display name for the queued user
+            String name = "Unknown (" + userId + ")";
+            try {
+                Member member = jda.getGuildById(session.guildId).getMemberById(userId);
+                if (member != null) {
+                    name = member.getEffectiveName();
+                } else {
+                    User user = jda.getUserById(userId);
+                    if (user != null) {
+                        name = user.getEffectiveName();
+                    }
+                }
+            } catch (Exception ignored) {}
+
+            queued.add(new QueuedUserDebug(name, buf.getPacketCount(), state.duration));
+        }
+
+        if (queued.isEmpty()) return "";
+
+        // Sort by duration ascending (earliest/next-to-last in queue first)
+        queued.sort((a, b) -> Long.compare(a.waitingMs, b.waitingMs));
+
+        StringBuilder sb = new StringBuilder(" | Q: ");
+        for (int i = 0; i < queued.size(); i++) {
+            if (i > 0) sb.append(", ");
+            QueuedUserDebug q = queued.get(i);
+            double seconds = q.waitingMs / 1000.0;
+            sb.append(String.format("%s (%s, %.1fs)", q.name, q.packetCount + " pkts", seconds));
+        }
+        return sb.toString();
+    }
+
+    private static class QueuedUserDebug {
+        final String name;
+        final int packetCount;
+        final long waitingMs;
+
+        QueuedUserDebug(String name, int packetCount, long waitingMs) {
+            this.name = name;
+            this.packetCount = packetCount;
+            this.waitingMs = waitingMs;
+        }
+    }
+
+    private void addCaption(VoiceSession session, String displayName, String text, String debugStr, long currentUserId) {
+        String queueDebug = getQueueDebug(session, currentUserId);
+        String footerText = debugStr + queueDebug;
+
         synchronized (session.userLogs) {
             if (!sessions.containsKey(session.guildId)) return;
 
@@ -475,7 +640,7 @@ public class CaptionsManager extends ListenerAdapter {
                     .setTitle(title)
                     .setDescription(content)
                     .setColor(Color.GREEN)
-                    .setFooter(debugStr);
+                    .setFooter(footerText);
 
             MessageChannel channel = jda.getChannelById(MessageChannel.class, session.textChannelId);
             if (channel != null) {
