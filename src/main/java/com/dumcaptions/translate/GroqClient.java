@@ -37,10 +37,17 @@ public class GroqClient {
     public static class GroqResult {
         public final String text;
         public final String debugStr;
+        /** End timestamp (in ms) of the last valid segment. -1 if no segments. */
+        public final double lastSegmentEndMs;
 
         public GroqResult(String text, String debugStr) {
+            this(text, debugStr, -1);
+        }
+
+        public GroqResult(String text, String debugStr, double lastSegmentEndMs) {
             this.text = text;
             this.debugStr = debugStr;
+            this.lastSegmentEndMs = lastSegmentEndMs;
         }
     }
 
@@ -185,9 +192,11 @@ public class GroqClient {
         }
 
         StringBuilder finalText = new StringBuilder();
+        double lastSegmentEnd = -1;
         for (GroqSegment seg : validSegments) {
             if (finalText.length() > 0) finalText.append(" ");
             finalText.append(seg.text);
+            lastSegmentEnd = Math.max(lastSegmentEnd, seg.end);
         }
 
         int count = validSegments.size();
@@ -212,7 +221,9 @@ public class GroqClient {
             logger.info("[{}] **Blacklisted: {}**", userIdentifier, String.join(", ", blacklistedTexts));
         }
 
-        return new GroqResult(resultText, "");
+        // Convert to milliseconds for the caller
+        double lastSegmentEndMs = lastSegmentEnd >= 0 ? lastSegmentEnd * 1000 : -1;
+        return new GroqResult(resultText, "", lastSegmentEndMs);
     }
 
     private String filterHallucinations(String text) {

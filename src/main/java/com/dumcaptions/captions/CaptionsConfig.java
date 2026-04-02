@@ -31,7 +31,10 @@ public class CaptionsConfig {
     public static final int MIN_CONSECUTIVE_FOR_TRIGGER = 4;    // Need 4+ consecutive frames to trigger isSpeech
     
     // Overlap management
-    public static final int OVERLAP_PACKETS = 100;              // 2 seconds (100 * 20ms)
+    public static final int OVERLAP_PACKETS = 50;               // Fallback: 1 second (50 * 20ms)
+    public static final int MIN_OVERLAP_PACKETS = 25;           // Minimum overlap: 0.5 seconds
+    public static final double MAX_OVERLAP_MS = 1500;           // Maximum overlap to retain: 1.5s
+    public static final double OVERLAP_SAFETY_MS = 500;         // Safety margin for word boundaries: 0.5s
     
     // Hallucination filter strings
     public static final String[] HALLUCINATION_BLACKSET = {

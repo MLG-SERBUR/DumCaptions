@@ -69,6 +69,8 @@ public class CaptionsManager extends ListenerAdapter {
         public final String textChannelId;
         public final Map<Long, AudioBuffer> userAudio = new ConcurrentHashMap<>();
         public final Map<Long, String> lastUserText = new ConcurrentHashMap<>();
+        /** End timestamp (ms) of the last transcribed segment per user, for timestamp-driven overlap */
+        public final Map<Long, Double> lastUserSegmentEnd = new ConcurrentHashMap<>();
         public final List<String> userLogs = new ArrayList<>();
         public final Map<Long, Float> userVadThresholds = new ConcurrentHashMap<>();
         public final Map<Long, Integer> userVadDroppedSequential = new ConcurrentHashMap<>();
@@ -275,7 +277,9 @@ public class CaptionsManager extends ListenerAdapter {
                 if (canRequest()) {
                     // Pop from buffer
                     boolean isHard = entry.state.priority == AudioBuffer.Priority.HARD_CUTOFF;
-                    List<byte[]> packets = entry.buf.pop(isHard);
+                    // Retrieve last segment end time for timestamp-driven overlap
+                    double lastEndMs = session.lastUserSegmentEnd.getOrDefault(entry.userId, -1.0);
+                    List<byte[]> packets = entry.buf.pop(isHard, lastEndMs, entry.state.duration);
                     if (packets.size() >= 25) {
                         processChunk(session, entry.userId, packets);
                         consecutiveSubs.put(entry.userId, subs + 1);
@@ -410,6 +414,10 @@ public class CaptionsManager extends ListenerAdapter {
                 }
 
                 session.lastUserText.put(userId, displayText);
+                
+                // Store the segment end time for timestamp-driven overlap on the next buffer
+                session.lastUserSegmentEnd.put(userId, result.lastSegmentEndMs);
+                
                 addCaption(session, displayName, displayText, overlapFooter, userId);
 
             } catch (Exception e) {

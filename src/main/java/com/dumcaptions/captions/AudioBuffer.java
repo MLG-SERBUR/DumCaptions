@@ -73,15 +73,51 @@ public class AudioBuffer {
         }
     }
 
-    public synchronized List<byte[]> pop(boolean isHardCutoff) {
+    /**
+     * Pops packets from the buffer for processing.
+     * 
+     * @param isHardCutoff whether this is a hard cutoff trigger
+     * @param lastSegmentEndMs end timestamp (ms) of last transcribed segment, or -1 if unknown
+     * @param bufferDurationMs total duration of this buffer in ms
+     * @return list of packet groups to process
+     */
+    public synchronized List<byte[]> pop(boolean isHardCutoff, double lastSegmentEndMs, long bufferDurationMs) {
         List<byte[]> p = new ArrayList<>(packets);
 
-        if (isHardCutoff && packets.size() > CaptionsConfig.OVERLAP_PACKETS) {
-            // Retain overlap
-            List<byte[]> overlap = new ArrayList<>(packets.subList(packets.size() - CaptionsConfig.OVERLAP_PACKETS, packets.size()));
-            packets.clear();
-            packets.addAll(overlap);
-            firstPush = Instant.now().minusMillis(2000); // Reset to 2s ago
+        if (isHardCutoff && packets.size() > 1) {
+            // Calculate how many packets to retain for overlap
+            int retainCount;
+            
+            if (lastSegmentEndMs > 0 && bufferDurationMs > 0) {
+                // Timestamp-driven overlap: retain only audio after the last segment ended,
+                // plus a small overlap window for word boundary safety
+                double untranscribedMs = Math.max(0, bufferDurationMs - lastSegmentEndMs);
+                double overlapMs = untranscribedMs + CaptionsConfig.OVERLAP_SAFETY_MS;
+                overlapMs = Math.min(overlapMs, CaptionsConfig.MAX_OVERLAP_MS); // Cap maximum overlap
+                
+                // Each Opus packet is ~20ms
+                retainCount = (int) Math.ceil(overlapMs / 20.0);
+                retainCount = Math.max(retainCount, CaptionsConfig.MIN_OVERLAP_PACKETS);
+            } else {
+                // Fallback: use fixed overlap
+                retainCount = CaptionsConfig.OVERLAP_PACKETS;
+            }
+            
+            // Safety: don't retain more than we have
+            retainCount = Math.min(retainCount, packets.size() - 1);
+            retainCount = Math.max(retainCount, 0);
+            
+            if (retainCount > 0) {
+                List<byte[]> overlap = new ArrayList<>(packets.subList(packets.size() - retainCount, packets.size()));
+                packets.clear();
+                packets.addAll(overlap);
+                // Reset firstPush to reflect the retained audio duration
+                firstPush = Instant.now().minusMillis(retainCount * 20L);
+            } else {
+                packets.clear();
+                firstPush = null;
+                lastPush = null;
+            }
         } else {
             packets.clear();
             firstPush = null;
