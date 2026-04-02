@@ -17,7 +17,7 @@ public class OggOpusWriter {
     private static final byte HEADER_TYPE_BOS = 0x02; // Beginning of stream
     private static final byte HEADER_TYPE_EOS = 0x04; // End of stream
 
-    public static byte[] write(List<byte[]> packets) throws IOException {
+    public static byte[] write(List<BufferedOpusPacket> packets) throws IOException {
         ByteArrayOutputStream out = new ByteArrayOutputStream();
         int serial = new Random().nextInt();
         
@@ -31,7 +31,7 @@ public class OggOpusWriter {
         long granulePos = 0;
         int pageSeq = 2;
         for (int i = 0; i < packets.size(); i++) {
-            byte[] packet = packets.get(i);
+            byte[] packet = packets.get(i).getOpusAudio();
             granulePos += 960; // 20ms at 48kHz
             
             byte headerType = (i == packets.size() - 1) ? HEADER_TYPE_EOS : (byte) 0;

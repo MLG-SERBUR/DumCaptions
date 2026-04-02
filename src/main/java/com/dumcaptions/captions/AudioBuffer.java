@@ -7,7 +7,7 @@ import java.util.List;
 
 public class AudioBuffer {
     private final long ssrc;
-    private final List<byte[]> packets = new ArrayList<>();
+    private final List<BufferedOpusPacket> packets = new ArrayList<>();
     private Instant firstPush = null;
     private Instant lastPush = null;
     /** Duration of overlap packets retained (ms), set by pop(). */
@@ -17,11 +17,11 @@ public class AudioBuffer {
         this.ssrc = ssrc;
     }
 
-    public synchronized void push(byte[] opusData) {
+    public synchronized void push(BufferedOpusPacket opusPacket) {
         if (firstPush == null) {
             firstPush = Instant.now();
         }
-        packets.add(opusData);
+        packets.add(opusPacket);
         lastPush = Instant.now();
     }
 
@@ -83,8 +83,8 @@ public class AudioBuffer {
      * @param bufferDurationMs total duration of this buffer in ms
      * @return list of packet groups to process
      */
-    public synchronized List<byte[]> pop(boolean isHardCutoff, double lastSegmentEndMs, long bufferDurationMs) {
-        List<byte[]> p = new ArrayList<>(packets);
+    public synchronized List<BufferedOpusPacket> pop(boolean isHardCutoff, double lastSegmentEndMs, long bufferDurationMs) {
+        List<BufferedOpusPacket> p = new ArrayList<>(packets);
 
         if (isHardCutoff && packets.size() > 1) {
             // Calculate how many packets to retain for overlap
@@ -110,7 +110,7 @@ public class AudioBuffer {
             retainCount = Math.max(retainCount, 0);
             
             if (retainCount > 0) {
-                List<byte[]> overlap = new ArrayList<>(packets.subList(packets.size() - retainCount, packets.size()));
+                List<BufferedOpusPacket> overlap = new ArrayList<>(packets.subList(packets.size() - retainCount, packets.size()));
                 packets.clear();
                 packets.addAll(overlap);
                 // Reset firstPush to reflect the retained audio duration

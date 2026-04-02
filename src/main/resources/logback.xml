@@ -5,6 +5,8 @@
         </encoder>
     </appender>
 
+    <logger name="net.dv8tion.jda.internal.audio.AudioPacket" level="ERROR" />
+
     <root level="info">
         <appender-ref ref="STDOUT" />
     </root>

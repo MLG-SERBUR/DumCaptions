@@ -199,7 +199,7 @@ public class CaptionsManager extends ListenerAdapter {
 
             long userId = packet.getUserId();
             AudioBuffer buf = session.userAudio.computeIfAbsent(userId, AudioBuffer::new);
-            buf.push(packet.getOpusAudio());
+            buf.push(BufferedOpusPacket.from(packet));
         }
 
         @Override
@@ -277,7 +277,7 @@ public class CaptionsManager extends ListenerAdapter {
                 boolean isHard = entry.state.priority == AudioBuffer.Priority.HARD_CUTOFF;
                 // Retrieve last segment end time for timestamp-driven overlap
                 double lastEndMs = session.lastUserSegmentEnd.getOrDefault(entry.userId, -1.0);
-                List<byte[]> packets = entry.buf.pop(isHard, lastEndMs, entry.state.duration);
+                List<BufferedOpusPacket> packets = entry.buf.pop(isHard, lastEndMs, entry.state.duration);
                 if (packets.size() >= 25) {
                     // Capture overlap duration from the buffer (set during pop())
                     double overlapMs = entry.buf.getLastRetainedOverlapMs();
@@ -382,7 +382,7 @@ public class CaptionsManager extends ListenerAdapter {
         });
     }
 
-    private void analyzeVadAndQueue(VoiceSession session, long userId, List<byte[]> packets, double overlapMs) {
+    private void analyzeVadAndQueue(VoiceSession session, long userId, List<BufferedOpusPacket> packets, double overlapMs) {
         audioExecutor.submit(() -> {
             String displayName = "Unknown (" + userId + ")";
             try {
@@ -396,8 +396,13 @@ public class CaptionsManager extends ListenerAdapter {
                     }
                 }
 
+                PreparedPacketBatch batch = preparePacketBatch(packets);
+                if (batch.hasIssues() && batch.shouldWarn()) {
+                    logger.warn("Opus sanitize {}: {}", displayName, batch.summary());
+                }
+
                 // VAD Filtering - fixed threshold, zero-latency (not gated by rate limit)
-                VadStats stats = calculateVad(packets, overlapMs);
+                VadStats stats = calculateVad(batch, overlapMs);
                 
                 if (!stats.isSpeech) {
                     logger.info("VAD REJECT {}: {}", displayName, stats.debugReason);
@@ -406,7 +411,7 @@ public class CaptionsManager extends ListenerAdapter {
                 
                 // Passed VAD - Queue for Groq transcription
                 logger.info("VAD PASS {}: {}", displayName, stats.debugReason);
-                groqQueue.offer(new GroqSubmission(session, userId, displayName, packets, overlapMs, stats));
+                groqQueue.offer(new GroqSubmission(session, userId, displayName, batch.validPackets, overlapMs, stats));
 
             } catch (Exception e) {
                 logger.error("Error analyzing VAD for user {}: {}", displayName, e.getMessage(), e);
@@ -418,11 +423,11 @@ public class CaptionsManager extends ListenerAdapter {
         final VoiceSession session;
         final long userId;
         final String displayName;
-        final List<byte[]> packets;
+        final List<BufferedOpusPacket> packets;
         final double overlapMs;
         final VadStats stats;
 
-        GroqSubmission(VoiceSession session, long userId, String displayName, List<byte[]> packets, double overlapMs, VadStats stats) {
+        GroqSubmission(VoiceSession session, long userId, String displayName, List<BufferedOpusPacket> packets, double overlapMs, VadStats stats) {
             this.session = session;
             this.userId = userId;
             this.displayName = displayName;
@@ -467,69 +472,14 @@ public class CaptionsManager extends ListenerAdapter {
      * 2. At least MIN_HIGH_CONFIDENCE_FRAMES above HIGH_CONFIDENCE_THRESHOLD (quality gate)
      * 3. Speech frames >= MIN_SPEECH_PERCENTAGE of total (sustained presence)
      */
-    private VadStats calculateVad(List<byte[]> packets, double overlapMs) throws Exception {
-        List<short[]> decodedFrames = new ArrayList<>();
-        int maxAmplitude = 0;
-        int totalValidFrames = 0;
+    private VadStats calculateVad(PreparedPacketBatch batch, double overlapMs) throws Exception {
+        List<short[]> decodedFrames = batch.decodedFrames;
+        int totalValidFrames = decodedFrames.size();
 
-        OpusDecoder decoder = new OpusDecoder(48000, 2);
-        short[] pcm = new short[5760]; 
-        int errorCount = 0;
-        
-        // Calculate how many packets at the start are overlap carryover from previous chunk
-        int overlapPacketCount = (int) Math.ceil(overlapMs / 20.0);
-        
-        for (int i = 0; i < packets.size(); i++) {
-            boolean isOverlapPacket = i < overlapPacketCount;
-            byte[] opus = packets.get(i);
-            
-            if (opus == null || opus.length < 5) {
-                continue;
-            }
-
-            try {
-                int samplesPerChannel = decoder.decode(opus, 0, opus.length, pcm, 0, 2880, false);
-                if (samplesPerChannel > 0) {
-                    totalValidFrames++;
-                    short[] monoPcm = new short[CaptionsConfig.VAD_FRAME_SIZE];
-                    for (int s = 0; s < Math.min(samplesPerChannel, CaptionsConfig.VAD_FRAME_SIZE); s++) {
-                        short val = (short) ((pcm[s * 2] + pcm[s * 2 + 1]) / 2);
-                        monoPcm[s] = val;
-                        maxAmplitude = Math.max(maxAmplitude, Math.abs(val));
-                    }
-                    decodedFrames.add(monoPcm);
-                }
-            } catch (OpusException e) {
-                errorCount++;
-                double errorRate = (double) errorCount / packets.size();
-                if (errorRate > CaptionsConfig.MAX_OPUS_ERROR_PERCENTAGE || errorCount == 1) {
-                    StringBuilder hex = new StringBuilder();
-                    for (int b = 0; b < Math.min(opus.length, 8); b++) {
-                        hex.append(String.format("%02X ", opus[b]));
-                    }
-                    
-                    String tocInfo = "unknown";
-                    if (opus.length > 0) {
-                        int toc = opus[0] & 0xFF;
-                        int config = (toc >> 3) & 0x1F;
-                        int s = (toc >> 2) & 1;
-                        int c = toc & 3;
-                        tocInfo = String.format("TOC[config=%d, s=%d, c=%d]", config, s, c);
-                    }
-
-                    String overlapPrefix = isOverlapPacket ? "[OVERLAP] " : "";
-                    
-                    if (errorCount == 1) {
-                        logger.debug("{}First Opus decoder error in chunk (packet {}/{}): {}", overlapPrefix, i, packets.size(), e.getMessage());
-                    } else {
-                        logger.warn("{}Opus decoder error rate high ({}/{} - {}%): Last error at packet {}: {}. Hex(8): {} | {}", 
-                            overlapPrefix, errorCount, packets.size(), (int)(errorRate * 100), i, e.getMessage(), hex.toString().trim(), tocInfo);
-                    }
-                }
-            }
+        if (totalValidFrames == 0) {
+            return new VadStats(false, 0, 0, batch.maxAmplitude, 0, 0, 0,
+                    "REJECT: no valid frames, " + batch.summary());
         }
-        
-        if (totalValidFrames == 0) return new VadStats(false, 0, 0, 0, 0, 0, 0, "REJECT: no valid frames");
         
         // Single VAD instance with fixed threshold
         float maxProbability = 0f;
@@ -569,8 +519,12 @@ public class CaptionsManager extends ListenerAdapter {
         debug.append(framesPartDebug);
         debug.append(String.format(", max_prob=%.2f, avg_prob=%.2f", maxProbability, avgSpeechProbability));
         debug.append(String.format(", hi_conf=%d", highConfidenceFrames));
-        debug.append(String.format(", amp=%d", maxAmplitude));
+        debug.append(String.format(", amp=%d", batch.maxAmplitude));
         debug.append(String.format(", thr=%.2f", CaptionsConfig.VAD_THRESHOLD));
+        if (overlapMs > 0) {
+            debug.append(String.format(", overlap=%.0fms", overlapMs));
+        }
+        debug.append(", ").append(batch.summary());
         
         // Final decision: need enough speech frames OR high confidence speech
         // The OR gate ensures that even a short buffer with clear speech gets through,
@@ -578,9 +532,144 @@ public class CaptionsManager extends ListenerAdapter {
         boolean isSpeech = hasEnoughSpeechFrames && hasEnoughPercentage && hasHighConfidence;
         debug.append(" | decision: ").append(isSpeech ? "SPEECH" : "REJECT");
         
-        return new VadStats(isSpeech, speechFrames, totalValidFrames, maxAmplitude,
+        return new VadStats(isSpeech, speechFrames, totalValidFrames, batch.maxAmplitude,
                            maxProbability, avgSpeechProbability, highConfidenceFrames,
                            debug.toString());
+    }
+
+    private PreparedPacketBatch preparePacketBatch(List<BufferedOpusPacket> packets) throws OpusException {
+        List<BufferedOpusPacket> orderedPackets = new ArrayList<>(packets);
+        Collections.sort(orderedPackets);
+
+        List<BufferedOpusPacket> validPackets = new ArrayList<>();
+        List<short[]> decodedFrames = new ArrayList<>();
+        OpusDecoder decoder = new OpusDecoder(48000, 2);
+        short[] pcm = new short[5760];
+
+        int maxAmplitude = 0;
+        int decodeErrorPackets = 0;
+        int suspiciousPackets = 0;
+        int duplicatePackets = 0;
+        int outOfOrderPackets = 0;
+        int missingPackets = 0;
+        String firstDropDetail = null;
+
+        int previousArrivalSequence = -1;
+        for (BufferedOpusPacket packet : packets) {
+            int sequence = packet.getSequence();
+            if (previousArrivalSequence != -1 && sequence < previousArrivalSequence) {
+                outOfOrderPackets++;
+            }
+            previousArrivalSequence = sequence;
+        }
+
+        int previousSortedSequence = -1;
+        for (BufferedOpusPacket packet : orderedPackets) {
+            int sequence = packet.getSequence();
+            byte[] opus = packet.getOpusAudio();
+
+            if (previousSortedSequence != -1) {
+                if (sequence == previousSortedSequence) {
+                    duplicatePackets++;
+                    if (firstDropDetail == null) {
+                        firstDropDetail = formatDropDetail(packet, "duplicate sequence");
+                    }
+                    continue;
+                }
+                if (sequence > previousSortedSequence + 1) {
+                    missingPackets += sequence - previousSortedSequence - 1;
+                }
+            }
+            previousSortedSequence = sequence;
+
+            if (opus == null || opus.length == 0 || looksLikeCorruptPayload(opus)) {
+                suspiciousPackets++;
+                if (firstDropDetail == null) {
+                    firstDropDetail = formatDropDetail(packet, "suspicious payload");
+                }
+                continue;
+            }
+
+            try {
+                int samplesPerChannel = decoder.decode(opus, 0, opus.length, pcm, 0, 2880, false);
+                if (samplesPerChannel <= 0) {
+                    decodeErrorPackets++;
+                    if (firstDropDetail == null) {
+                        firstDropDetail = formatDropDetail(packet, "empty decode");
+                    }
+                    continue;
+                }
+
+                short[] monoPcm = new short[CaptionsConfig.VAD_FRAME_SIZE];
+                for (int s = 0; s < Math.min(samplesPerChannel, CaptionsConfig.VAD_FRAME_SIZE); s++) {
+                    short val = (short) ((pcm[s * 2] + pcm[s * 2 + 1]) / 2);
+                    monoPcm[s] = val;
+                    maxAmplitude = Math.max(maxAmplitude, Math.abs(val));
+                }
+
+                decodedFrames.add(monoPcm);
+                validPackets.add(packet);
+            } catch (OpusException e) {
+                decodeErrorPackets++;
+                if (firstDropDetail == null) {
+                    firstDropDetail = formatDropDetail(packet, e.getMessage());
+                }
+            }
+        }
+
+        return new PreparedPacketBatch(
+                validPackets,
+                decodedFrames,
+                packets.size(),
+                decodeErrorPackets,
+                suspiciousPackets,
+                duplicatePackets,
+                outOfOrderPackets,
+                missingPackets,
+                maxAmplitude,
+                firstDropDetail);
+    }
+
+    private boolean looksLikeCorruptPayload(byte[] opus) {
+        if (opus.length == 0) {
+            return true;
+        }
+
+        int inspect = Math.min(opus.length, 8);
+        for (int i = 0; i < inspect; i++) {
+            if ((opus[i] & 0xFF) != 0xFF) {
+                return false;
+            }
+        }
+        return true;
+    }
+
+    private String formatDropDetail(BufferedOpusPacket packet, String reason) {
+        byte[] opus = packet.getOpusAudio();
+        StringBuilder hex = new StringBuilder();
+        for (int i = 0; i < Math.min(opus.length, 8); i++) {
+            hex.append(String.format("%02X ", opus[i]));
+        }
+
+        return String.format(
+                "first_drop=seq=%d ts=%d reason=%s hex=%s toc=%s",
+                packet.getSequence(),
+                packet.getTimestamp(),
+                reason,
+                hex.toString().trim(),
+                describeToc(opus));
+    }
+
+    private String describeToc(byte[] opus) {
+        if (opus.length == 0) {
+            return "unknown";
+        }
+
+        int toc = opus[0] & 0xFF;
+        int config = (toc >> 3) & 0x1F;
+        int s = (toc >> 2) & 1;
+        int c = toc & 3;
+        return String.format("TOC[config=%d, s=%d, c=%d]", config, s, c);
     }
 
     /**
