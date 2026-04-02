@@ -50,6 +50,9 @@ public class CaptionsManager extends ListenerAdapter {
     // Per-guild queue fairness: track how many consecutive submissions per sessionId
     // Key = guildId, Value = map of userId -> consecutive count since last submission
     private final Map<String, Map<Long, Integer>> userConsecutiveSubmissions = new ConcurrentHashMap<>();
+    
+    // Processing state
+    private final java.util.concurrent.atomic.AtomicBoolean processingInFlight = new java.util.concurrent.atomic.AtomicBoolean(false);
 
     // Shaping constants
     private static final long AGING_BOOST_MS = 5000;  // Every 5s of waiting, boost priority by 1
@@ -270,7 +273,11 @@ public class CaptionsManager extends ListenerAdapter {
                     continue; // Skip this user for now, give others a turn
                 }
 
-                if (canRequest()) {
+                // Check rate limit and processing lock
+                if (processingInFlight.get() || isRateLimited()) {
+                    break; // Rate limited or already processing, don't dispatch this tick
+                }
+
                 // Pop from buffer
                 boolean isHard = entry.state.priority == AudioBuffer.Priority.HARD_CUTOFF;
                 // Retrieve last segment end time for timestamp-driven overlap
@@ -279,18 +286,17 @@ public class CaptionsManager extends ListenerAdapter {
                 if (packets.size() >= 25) {
                     // Capture overlap duration from the buffer (set during pop())
                     double overlapMs = entry.buf.getLastRetainedOverlapMs();
+                    
+                    processingInFlight.set(true);
                     processChunk(session, entry.userId, packets, overlapMs);
-                        consecutiveSubs.put(entry.userId, subs + 1);
-                        dispatched = true;
-                        break; // One dispatch per tick per session
-                    } else {
-                        // Too small, clear without processing
-                        consecutiveSubs.put(entry.userId, 0);
-                        continue;
-                    }
+                    
+                    consecutiveSubs.put(entry.userId, subs + 1);
+                    dispatched = true;
+                    break; // One dispatch per tick per session
                 } else {
-                    // Rate limited, don't dispatch, will try next tick
-                    break;
+                    // Too small, clear without processing
+                    consecutiveSubs.put(entry.userId, 0);
+                    continue;
                 }
             }
 
@@ -320,15 +326,19 @@ public class CaptionsManager extends ListenerAdapter {
         }
     }
 
-    private boolean canRequest() {
-        long now = System.currentTimeMillis();
-        if (now < nextReqTime.get()) return false;
-        nextReqTime.set(now + CaptionsConfig.RATE_LIMIT_INTERVAL_MS);
-        return true;
+    private boolean isRateLimited() {
+        return System.currentTimeMillis() < nextReqTime.get();
+    }
+
+    private void markRequestSent() {
+        nextReqTime.set(System.currentTimeMillis() + CaptionsConfig.RATE_LIMIT_INTERVAL_MS);
     }
 
     private void processChunk(VoiceSession session, long userId, List<byte[]> packets, double overlapMs) {
-        if (packets.size() < 25) return; // Ignore small clicks
+        if (packets.size() < 25) {
+            processingInFlight.set(false);
+            return;
+        }
 
         audioExecutor.submit(() -> {
             String displayName = "Unknown (" + userId + ")";
@@ -351,8 +361,9 @@ public class CaptionsManager extends ListenerAdapter {
                     return;
                 }
                 
-                // Passed VAD
+                // Passed VAD - commit the rate-limit slot
                 logger.info("VAD PASS {}: {}", displayName, stats.debugReason);
+                markRequestSent();
 
                 // Wrap in OGG
                 byte[] oggData = OggOpusWriter.write(packets);
@@ -396,6 +407,8 @@ public class CaptionsManager extends ListenerAdapter {
 
             } catch (Exception e) {
                 logger.error("Error processing audio chunk for user {}: {}", displayName, e.getMessage(), e);
+            } finally {
+                processingInFlight.set(false);
             }
         });
     }
