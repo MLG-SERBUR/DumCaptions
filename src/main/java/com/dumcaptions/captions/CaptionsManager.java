@@ -35,6 +35,7 @@ import java.util.*;
 import java.util.List;
 import java.util.concurrent.*;
 import java.util.concurrent.atomic.AtomicLong;
+import java.util.regex.Pattern;
 
 public class CaptionsManager extends ListenerAdapter {
     private static final Logger logger = LoggerFactory.getLogger(CaptionsManager.class);
@@ -53,6 +54,9 @@ public class CaptionsManager extends ListenerAdapter {
     // Shaping constants
     private static final long AGING_BOOST_MS = 5000;  // Every 5s of waiting, boost priority by 1
     private static final int MAX_CONSECUTIVE_PER_TICK = 1; // Max submissions per buffer per tick (fairness)
+
+    // Overlap detection constants
+    private static final int OVERLAP_WORD_COUNT = 3;  // Number of words to check for prefix/suffix overlap
 
     public CaptionsManager(JDA jda, GroqClient groq) {
         this.jda = jda;
@@ -388,8 +392,25 @@ public class CaptionsManager extends ListenerAdapter {
                     return;
                 }
 
-                session.lastUserText.put(userId, text);
-                addCaption(session, displayName, text, result.debugStr, userId);
+                // Check for overlap with the previous caption from this user
+                String previousText = session.lastUserText.get(userId);
+                String displayText = text;
+                if (previousText != null && !previousText.isEmpty()) {
+                    String overlapResult = resolveOverlap(previousText, text);
+                    if (overlapResult == null) {
+                        // New text is fully contained in or identical to last caption — skip
+                        logger.info("OVERLAP SKIP {} (contained in last): '{}'", displayName, text);
+                        session.lastUserText.put(userId, previousText); // keep last as-is
+                        return;
+                    }
+                    displayText = overlapResult;
+                    if (!displayText.equals(text) && !displayText.isEmpty()) {
+                        logger.info("OVERLAP TRIM {} '{}' -> '{}'", displayName, text, displayText);
+                    }
+                }
+
+                session.lastUserText.put(userId, displayText);
+                addCaption(session, displayName, displayText, result.debugStr, userId);
 
             } catch (Exception e) {
                 logger.error("Error processing audio chunk for user {}: {}", displayName, e.getMessage(), e);
@@ -686,6 +707,115 @@ public class CaptionsManager extends ListenerAdapter {
                         SelectOption.of("Arabic", "arabic").withDescription("whisper-large-v3, arabic target").withDefault("arabic".equals(selected))
                 )
                 .build();
+    }
+
+    /**
+     * Detects and resolves overlap between the previous caption and the current caption.
+     *
+     * Strategy:
+     * 1. If the current text is fully contained within the previous text (or vice versa),
+     *    return null to signal a full skip.
+     * 2. Check if the last N words of the previous text match the first N words of the
+     *    current text. If so, strip the overlapping prefix from the current text.
+     * 3. If no overlap is detected, return the current text as-is.
+     *
+     * @param previous The previous caption text from the same user.
+     * @param current  The new caption text from the same user.
+     * @return The resolved text to display (with overlap stripped), or null if the entire
+     *         current caption should be skipped.
+     */
+    private String resolveOverlap(String previous, String current) {
+        String prevNorm = normalize(previous);
+        String currNorm = normalize(current);
+
+        // Case 1: Exact match or current is fully contained in previous
+        if (currNorm.equals(prevNorm) || prevNorm.contains(currNorm)) {
+            return null; // Skip entirely
+        }
+
+        // Case 2: Previous is contained in current — this is the re-statement case
+        // e.g., prev="dead", curr="Whenever I join you you're lying down in bed dead"
+        // Here we want to send the current as-is (it's a restatement/clarification)
+        if (currNorm.contains(prevNorm)) {
+            return current;
+        }
+
+        // Case 3: Suffix-prefix word overlap
+        // e.g., prev="...in bed dead", curr="Laying down in bed dead."
+        // Extract last N words of previous and first N words of current
+        String[] prevWords = prevNorm.split("\\s+");
+        String[] currWords = currNorm.split("\\s+");
+
+        int maxOverlap = Math.min(Math.min(prevWords.length, currWords.length), OVERLAP_WORD_COUNT);
+
+        for (int overlapLen = maxOverlap; overlapLen >= 1; overlapLen--) {
+            // Build suffix of previous text with 'overlapLen' words
+            StringBuilder prevSuffix = new StringBuilder();
+            for (int i = prevWords.length - overlapLen; i < prevWords.length; i++) {
+                if (prevSuffix.length() > 0) prevSuffix.append(" ");
+                prevSuffix.append(prevWords[i]);
+            }
+
+            // Build prefix of current text with 'overlapLen' words
+            StringBuilder currPrefix = new StringBuilder();
+            for (int i = 0; i < overlapLen; i++) {
+                if (currPrefix.length() > 0) currPrefix.append(" ");
+                currPrefix.append(currWords[i]);
+            }
+
+            if (prevSuffix.toString().equals(currPrefix.toString())) {
+                // Found overlap — strip it from current text
+                // Calculate how many characters to skip from the beginning of current
+                String stripped = stripLeadingWords(current, overlapLen);
+                if (stripped != null && !stripped.trim().isEmpty()) {
+                    return stripped.trim();
+                } else {
+                    return null; // Nothing left after stripping
+                }
+            }
+        }
+
+        // No overlap detected
+        return current;
+    }
+
+    /**
+     * Normalizes text for comparison: lowercase, trim, strip punctuation.
+     */
+    private String normalize(String text) {
+        return text.toLowerCase().replaceAll("[^\\w\\s]", "").trim();
+    }
+
+    /**
+     * Strips the first N words from a string, preserving remaining capitalization and punctuation.
+     * Returns empty string if all words are stripped.
+     */
+    private String stripLeadingWords(String text, int wordCount) {
+        String trimmed = text.trim();
+        int pos = 0;
+        int wordsSkipped = 0;
+        boolean inWord = false;
+        for (int i = 0; i < trimmed.length(); i++) {
+            char c = trimmed.charAt(i);
+            if (Character.isWhitespace(c)) {
+                if (inWord) {
+                    inWord = false;
+                }
+            } else {
+                if (!inWord) {
+                    wordsSkipped++;
+                    if (wordsSkipped > wordCount) {
+                        pos = i;
+                        break;
+                    }
+                    inWord = true;
+                }
+            }
+        }
+        if (wordsSkipped <= wordCount) {
+            return "";
+        }
+        return trimmed.substring(pos);
     }
 
     public void registerCommands() {
