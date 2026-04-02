@@ -392,13 +392,25 @@ public class CaptionsManager extends ListenerAdapter {
 
                 // Check for overlap with the previous caption from this user
                 String previousText = session.lastUserText.get(userId);
-                if (previousText != null && !previousText.isEmpty() && isContained(normalize(text), normalize(previousText))) {
-                    logger.info("OVERLAP SKIP {} (contained in last): '{}'", displayName, text);
-                    return;
+                String displayText = text;
+                String overlapFooter = "";
+                if (previousText != null && !previousText.isEmpty()) {
+                    String overlapResult = resolveOverlap(previousText, text);
+                    if (overlapResult == null) {
+                        // New text is fully contained in previous caption — skip
+                        logger.info("OVERLAP SKIP {} (contained in last): '{}'", displayName, text);
+                        session.lastUserText.put(userId, previousText);
+                        return;
+                    }
+                    displayText = overlapResult;
+                    if (!displayText.equals(text) && !displayText.trim().isEmpty()) {
+                        overlapFooter = String.format("overlap_trim: '%s'->'%s'", text.trim(), displayText.trim());
+                        logger.info("OVERLAP TRIM {} '{}' -> '{}'", displayName, text, displayText);
+                    }
                 }
 
-                session.lastUserText.put(userId, text);
-                addCaption(session, displayName, text, "", userId);
+                session.lastUserText.put(userId, displayText);
+                addCaption(session, displayName, displayText, overlapFooter, userId);
 
             } catch (Exception e) {
                 logger.error("Error processing audio chunk for user {}: {}", displayName, e.getMessage(), e);
@@ -698,11 +710,56 @@ public class CaptionsManager extends ListenerAdapter {
     }
 
     /**
-     * Returns true if the current text is fully contained within the previous text.
-     * Used to skip redundant captions that repeat already-shown content.
+     * Detects and resolves prefix-suffix overlap between captions.
+     *
+     * Strategy:
+     * 1. If current is fully contained in previous, return null (skip).
+     * 2. If previous's suffix matches current's prefix, strip the overlap.
+     *    Example: prev="...in bed dead", curr="In bed dead. You should get up." -> "You should get up."
+     * 3. Otherwise, return current as-is.
      */
-    private boolean isContained(String currNorm, String prevNorm) {
-        return currNorm.equals(prevNorm) || prevNorm.contains(currNorm);
+    private String resolveOverlap(String previous, String current) {
+        String prevNorm = normalize(previous);
+        String currNorm = normalize(current);
+
+        // Case 1: Current is fully contained in previous (exact duplicate or subset)
+        if (currNorm.equals(prevNorm) || prevNorm.contains(currNorm)) {
+            return null; // Skip entirely
+        }
+
+        // Case 2: Suffix-prefix overlap detection
+        // Check if the end of previous matches the beginning of current.
+        // We try progressively shorter suffixes of the previous text,
+        // looking for a match at the start of the current text.
+        // Minimum overlap: 2 words (to avoid false positives on single words)
+        int minOverlapWords = 2;
+        String[] prevWords = prevNorm.split("\\s+");
+        String[] currWords = currNorm.split("\\s+");
+
+        for (int overlapLen = Math.min(prevWords.length, currWords.length); overlapLen >= minOverlapWords; overlapLen--) {
+            // Build suffix of previous text with 'overlapLen' words
+            StringBuilder prevSuffix = new StringBuilder();
+            for (int i = prevWords.length - overlapLen; i < prevWords.length; i++) {
+                if (prevSuffix.length() > 0) prevSuffix.append(" ");
+                prevSuffix.append(prevWords[i]);
+            }
+
+            // Build prefix of current text with 'overlapLen' words
+            StringBuilder currPrefix = new StringBuilder();
+            for (int i = 0; i < overlapLen; i++) {
+                if (currPrefix.length() > 0) currPrefix.append(" ");
+                currPrefix.append(currWords[i]);
+            }
+
+            if (prevSuffix.toString().equals(currPrefix.toString())) {
+                // Found overlap — strip the overlapping prefix from current
+                String stripped = stripPrefixWords(current, overlapLen);
+                return stripped.isEmpty() ? null : stripped.trim();
+            }
+        }
+
+        // No overlap detected
+        return current;
     }
 
     /**
@@ -710,6 +767,38 @@ public class CaptionsManager extends ListenerAdapter {
      */
     private String normalize(String text) {
         return text.toLowerCase().replaceAll("[^\\w\\s]", "").trim();
+    }
+
+    /**
+     * Strips the first N words from a string.
+     * Returns remaining text or empty string if all words removed.
+     */
+    private String stripPrefixWords(String text, int wordCount) {
+        String trimmed = text.trim();
+        int pos = 0;
+        int wordsSkipped = 0;
+        boolean inWord = false;
+
+        for (int i = 0; i < trimmed.length(); i++) {
+            char c = trimmed.charAt(i);
+            if (Character.isWhitespace(c)) {
+                if (inWord) inWord = false;
+            } else {
+                if (!inWord) {
+                    wordsSkipped++;
+                    if (wordsSkipped > wordCount) {
+                        pos = i;
+                        break;
+                    }
+                    inWord = true;
+                }
+            }
+        }
+
+        if (wordsSkipped <= wordCount) {
+            return "";
+        }
+        return trimmed.substring(pos);
     }
 
     public void registerCommands() {
