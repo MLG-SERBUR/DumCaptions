@@ -29,7 +29,7 @@ A high-performance Java-based Discord bot that provides real-time voice captions
       "groq_api_key": "YOUR_GROQ_API_KEY",
       "stt_model": "whisper-large-v3",
       "captions_enabled": true,
-      "vad_mode": "ratio"
+      "vad_mode": "adaptive"
     }
     ```
 
@@ -66,4 +66,22 @@ java --enable-native-access=ALL-UNNAMED -jar target/dum-captions-1.0-SNAPSHOT-sh
     ```
 
 ---
-Built with JDA, libdave-jvm, and Groq | [GitHub](https://github.com/MLG-SERBUR/DumTranslator)
+
+## Adaptive VAD system
+
+### Spanning
+
+In this VAD system, **Span** refers to the **temporal distance** between the very first speech hit and the very last speech hit in an audio buffer.
+
+Think of it as the "time envelope" of the speech activity.
+
+### How it is calculated:
+The code tracks the index of the first frame where speech was detected and the index of the last frame. 
+> **Span = (Last Speech Frame Index - First Speech Frame Index) + 1**
+
+### Why it matters:
+The "Span" helps the bot distinguish between a **short noise** and **sparse speech**:
+
+1.  **A short noise (like a mouse click or a pop):** Might have 4 frames of speech, but they all happen right next to each other. The span would be very small (e.g., `span=4`).
+2.  **Sparse speech (like a soft sentence):** Might also only have 4 frames that are loud enough to trigger the VAD, but those frames are spread out. In your example log (`span=91`), the first "hit" and the last "hit" were 91 frames apart. 
+

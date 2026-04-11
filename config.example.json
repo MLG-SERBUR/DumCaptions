@@ -3,5 +3,5 @@
     "groq_api_key": "YOUR_GROQ_API_KEY",
     "stt_model": "whisper-large-v3",
     "captions_enabled": true,
-    "vad_mode": "ratio"
+    "vad_mode": "adaptive"
 }

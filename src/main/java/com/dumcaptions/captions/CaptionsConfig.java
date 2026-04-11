@@ -15,7 +15,7 @@ public class CaptionsConfig {
     
     // TEN-VAD parameters
     public static final int VAD_FRAME_SIZE = 960;               // 20ms at 48kHz
-    public static final float VAD_THRESHOLD = 0.45f;             // Fixed threshold. 0.5f is default
+    public static final float VAD_THRESHOLD = 0.4f;             // Fixed threshold. 0.5f is default
     public static final double MIN_SPEECH_PERCENTAGE = 0.05;    // Drop if < 5% of frames are speech
     public static final int MIN_SPEECH_FRAMES = 2;              // Require at least 2 speech frames (transient guard)
     public static final float HIGH_CONFIDENCE_THRESHOLD = 0.5f; // Frames above this are "confident speech"
