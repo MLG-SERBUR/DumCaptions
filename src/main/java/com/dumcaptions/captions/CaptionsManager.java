@@ -1,7 +1,9 @@
 package com.dumcaptions.captions;
 
 import com.dumcaptions.translate.GroqClient;
-import com.dumcaptions.vad.TenVad;
+import com.dumcaptions.vad.VadAnalyzer;
+import com.dumcaptions.vad.VadMode;
+import com.dumcaptions.vad.VadStats;
 import net.dv8tion.jda.api.EmbedBuilder;
 import net.dv8tion.jda.api.JDA;
 import net.dv8tion.jda.api.audio.AudioReceiveHandler;
@@ -42,6 +44,7 @@ public class CaptionsManager extends ListenerAdapter {
 
     private final JDA jda;
     private final GroqClient groq;
+    private final VadAnalyzer vadAnalyzer;
     private final Map<String, VoiceSession> sessions = new ConcurrentHashMap<>(); // GuildID -> Session
     private final ScheduledExecutorService scheduler = Executors.newScheduledThreadPool(2);
     private final ExecutorService audioExecutor = Executors.newFixedThreadPool(4);
@@ -60,9 +63,10 @@ public class CaptionsManager extends ListenerAdapter {
     private static final int MAX_CONSECUTIVE_PER_TICK = 1; // Max submissions per buffer per tick (fairness)
 
 
-    public CaptionsManager(JDA jda, GroqClient groq) {
+    public CaptionsManager(JDA jda, GroqClient groq, VadMode vadMode) {
         this.jda = jda;
         this.groq = groq;
+        this.vadAnalyzer = new VadAnalyzer(vadMode);
 
         // Start the ticker for processing buffers and the groq queue
         scheduler.scheduleAtFixedRate(this::checkBuffers, 200, 200, TimeUnit.MILLISECONDS);
@@ -402,7 +406,7 @@ public class CaptionsManager extends ListenerAdapter {
                 }
 
                 // VAD Filtering - fixed threshold, zero-latency (not gated by rate limit)
-                VadStats stats = calculateVad(batch, overlapMs);
+                VadStats stats = vadAnalyzer.analyze(batch, overlapMs);
                 
                 if (!stats.isSpeech) {
                     logger.info("VAD REJECT {}: {}", displayName, stats.debugReason);
@@ -435,105 +439,6 @@ public class CaptionsManager extends ListenerAdapter {
             this.overlapMs = overlapMs;
             this.stats = stats;
         }
-    }
-
-    /**
-     * VAD statistics with probability-based decision making.
-     */
-    private static class VadStats {
-        public final boolean isSpeech;
-        public final int speechFrames;         // frames above threshold
-        public final int totalFrames;
-        public final int maxAmplitude;
-        public final float maxProbability;      // highest probability seen in buffer
-        public final float avgSpeechProbability; // average probability of speech frames only
-        public final int highConfidenceFrames;  // frames above HIGH_CONFIDENCE_THRESHOLD
-        public final String debugReason;
-
-        public VadStats(boolean isSpeech, int speechFrames, int totalFrames, int maxAmplitude,
-                        float maxProbability, float avgSpeechProbability, int highConfidenceFrames,
-                        String debugReason) {
-            this.isSpeech = isSpeech;
-            this.speechFrames = speechFrames;
-            this.totalFrames = totalFrames;
-            this.maxAmplitude = maxAmplitude;
-            this.maxProbability = maxProbability;
-            this.avgSpeechProbability = avgSpeechProbability;
-            this.highConfidenceFrames = highConfidenceFrames;
-            this.debugReason = debugReason;
-        }
-    }
-
-    /**
-     * Simplified VAD: single VAD instance, fixed threshold, probability-based decision.
-     * 
-     * Decision logic:
-     * 1. At least MIN_SPEECH_FRAMES above threshold (transient guard)
-     * 2. At least MIN_HIGH_CONFIDENCE_FRAMES above HIGH_CONFIDENCE_THRESHOLD (quality gate)
-     * 3. Speech frames >= MIN_SPEECH_PERCENTAGE of total (sustained presence)
-     */
-    private VadStats calculateVad(PreparedPacketBatch batch, double overlapMs) throws Exception {
-        List<short[]> decodedFrames = batch.decodedFrames;
-        int totalValidFrames = decodedFrames.size();
-
-        if (totalValidFrames == 0) {
-            return new VadStats(false, 0, 0, batch.maxAmplitude, 0, 0, 0,
-                    "REJECT: no valid frames, " + batch.summary());
-        }
-        
-        // Single VAD instance with fixed threshold
-        float maxProbability = 0f;
-        float sumSpeechProbability = 0f;
-        int speechFrames = 0;
-        int highConfidenceFrames = 0;
-        
-        try (TenVad vad = new TenVad(CaptionsConfig.VAD_FRAME_SIZE, CaptionsConfig.VAD_THRESHOLD)) {
-            for (short[] frame : decodedFrames) {
-                TenVad.VadResult result = vad.process(frame);
-                
-                maxProbability = Math.max(maxProbability, result.probability);
-                
-                if (result.isSpeech) {
-                    speechFrames++;
-                    sumSpeechProbability += result.probability;
-                    if (result.probability >= CaptionsConfig.HIGH_CONFIDENCE_THRESHOLD) {
-                        highConfidenceFrames++;
-                    }
-                }
-            }
-        }
-        
-        float avgSpeechProbability = speechFrames > 0 ? sumSpeechProbability / speechFrames : 0f;
-        double speechPercentage = (double) speechFrames / totalValidFrames;
-        
-        // Build debug reason
-        StringBuilder debug = new StringBuilder();
-        String framesPart = String.format("%d/%d (%.0f%%)", speechFrames, totalValidFrames, speechPercentage * 100);
-        
-        boolean hasEnoughSpeechFrames = speechFrames >= CaptionsConfig.MIN_SPEECH_FRAMES;
-        boolean hasEnoughPercentage = speechPercentage >= CaptionsConfig.MIN_SPEECH_PERCENTAGE;
-        boolean hasHighConfidence = highConfidenceFrames >= CaptionsConfig.MIN_HIGH_CONFIDENCE_FRAMES;
-        
-        // Mark failed checks for debugging
-        String framesPartDebug = hasEnoughPercentage ? framesPart : "**" + framesPart + "**";
-        debug.append(framesPartDebug);
-        debug.append(String.format(", max_prob=%.2f, avg_prob=%.2f", maxProbability, avgSpeechProbability));
-        debug.append(String.format(", hi_conf=%d", highConfidenceFrames));
-        debug.append(String.format(", amp=%d", batch.maxAmplitude));
-        debug.append(String.format(", thr=%.2f", CaptionsConfig.VAD_THRESHOLD));
-        if (overlapMs > 0) {
-            debug.append(String.format(", overlap=%.0fms", overlapMs));
-        }
-        debug.append(", ").append(batch.summary());
-        
-        // Final decision: need enough speech frames OR high confidence speech
-        // The OR gate ensures that even a short buffer with clear speech gets through,
-        // while the AND of frames+percentage guards against transients in longer buffers
-        boolean isSpeech = hasEnoughSpeechFrames && hasEnoughPercentage && hasHighConfidence;
-                
-        return new VadStats(isSpeech, speechFrames, totalValidFrames, batch.maxAmplitude,
-                           maxProbability, avgSpeechProbability, highConfidenceFrames,
-                           debug.toString());
     }
 
     private PreparedPacketBatch preparePacketBatch(List<BufferedOpusPacket> packets) throws OpusException {

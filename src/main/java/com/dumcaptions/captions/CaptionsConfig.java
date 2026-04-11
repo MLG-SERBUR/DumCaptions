@@ -1,7 +1,5 @@
 package com.dumcaptions.captions;
 
-import java.util.concurrent.TimeUnit;
-
 /**
  * Centralized configuration for captions logic.
  * These values can be hardcoded here for easy modification of the logic later.
@@ -22,6 +20,20 @@ public class CaptionsConfig {
     public static final int MIN_SPEECH_FRAMES = 2;              // Require at least 2 speech frames (transient guard)
     public static final float HIGH_CONFIDENCE_THRESHOLD = 0.5f; // Frames above this are "confident speech"
     public static final double MIN_HIGH_CONFIDENCE_FRAMES = 1;  // At least 1 high-confidence frame needed
+
+    // Adaptive VAD rescue path for quiet / weak microphones.
+    // This path allows sparse speech hits to pass when they are spread across a longer buffer
+    // with enough amplitude to distinguish them from very short noises.
+    public static final int ADAPTIVE_MIN_SPEECH_FRAMES = 2;
+    public static final int ADAPTIVE_MIN_HIGH_CONFIDENCE_FRAMES = 1;
+    public static final int ADAPTIVE_MIN_TOTAL_FRAMES = 80;
+    public static final float ADAPTIVE_MIN_MAX_PROBABILITY = 0.55f;
+    public static final float ADAPTIVE_MIN_AVG_SPEECH_PROBABILITY = 0.50f;
+    public static final int ADAPTIVE_MIN_AMPLITUDE = 8000;
+    public static final double ADAPTIVE_MIN_SPAN_RATIO = 0.10;
+    public static final int ADAPTIVE_SINGLE_FRAME_MIN_TOTAL_FRAMES = 100;
+    public static final float ADAPTIVE_SINGLE_FRAME_MIN_MAX_PROBABILITY = 0.56f;
+    public static final float ADAPTIVE_SINGLE_FRAME_MIN_AVG_SPEECH_PROBABILITY = 0.56f;
     
     // Overlap management
     public static final int OVERLAP_PACKETS = 50;               // Fallback: 1 second (50 * 20ms)

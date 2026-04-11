@@ -3,7 +3,7 @@ package com.dumcaptions.captions;
 import java.util.ArrayList;
 import java.util.List;
 
-final class PreparedPacketBatch {
+public final class PreparedPacketBatch {
     final List<BufferedOpusPacket> validPackets;
     final List<short[]> decodedFrames;
     final int totalPackets;
@@ -93,5 +93,17 @@ final class PreparedPacketBatch {
         }
 
         return summary.toString();
+    }
+
+    public List<short[]> getDecodedFrames() {
+        return decodedFrames;
+    }
+
+    public int getMaxAmplitude() {
+        return maxAmplitude;
+    }
+
+    public String getSummary() {
+        return summary();
     }
 }

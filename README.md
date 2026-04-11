@@ -26,9 +26,16 @@ A high-performance Java-based Discord bot that provides real-time voice captions
     ```json
     {
       "discord_token": "YOUR_DISCORD_TOKEN",
-      "groq_api_key": "YOUR_GROQ_API_KEY"
+      "groq_api_key": "YOUR_GROQ_API_KEY",
+      "stt_model": "whisper-large-v3",
+      "captions_enabled": true,
+      "vad_mode": "ratio"
     }
     ```
+
+    `vad_mode` supports:
+    - `ratio`: current strict percentage-based gate
+    - `adaptive`: keeps the strict gate, but also rescues sparse speech spread across a longer buffer
 
 ### Running the Bot
 Since this bot uses native features and the latest Java APIs, you must enable native access:
@@ -42,7 +49,7 @@ java --enable-native-access=ALL-UNNAMED -jar target/dum-captions-1.0-SNAPSHOT-sh
 
 ## Development
 
-- **VAD Configuration**: Adjust thresholds in `CaptionsConfig.java`.
+- **VAD Configuration**: Choose the runtime mode in `config.json`; tune hardcoded thresholds in `CaptionsConfig.java`.
 - **Audio Processing**: Handles stereo 48kHz Opus audio packets directly from Discord.
 - **Ogg Container**: Generates Groq-compliant Ogg/Opus streams with valid CRC-32 checksums.
 

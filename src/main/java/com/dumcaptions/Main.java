@@ -3,6 +3,7 @@ package com.dumcaptions;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.dumcaptions.captions.CaptionsManager;
 import com.dumcaptions.translate.GroqClient;
+import com.dumcaptions.vad.VadMode;
 import net.dv8tion.jda.api.JDA;
 import net.dv8tion.jda.api.JDABuilder;
 import net.dv8tion.jda.api.OnlineStatus;
@@ -27,6 +28,7 @@ public class Main {
         public String groq_api_key;
         public String stt_model;
         public boolean captions_enabled;
+        public String vad_mode;
     }
 
     public static void main(String[] args) {
@@ -53,6 +55,8 @@ public class Main {
             // Initialize DAVE support
             NativeDaveFactory daveFactory = new NativeDaveFactory();
             LDJDADaveSessionFactory daveSessionFactory = new LDJDADaveSessionFactory(daveFactory);
+            VadMode vadMode = VadMode.fromConfig(config.vad_mode);
+            logger.info("Using VAD mode: {}", vadMode.configValue());
 
             JDABuilder builder = JDABuilder.createDefault(config.discord_token)
                     .enableIntents(GatewayIntent.GUILD_MESSAGES, GatewayIntent.MESSAGE_CONTENT, GatewayIntent.GUILD_VOICE_STATES, GatewayIntent.GUILD_MEMBERS)
@@ -67,7 +71,7 @@ public class Main {
             jda.awaitReady();
 
             GroqClient groq = new GroqClient(config.groq_api_key, config.stt_model);
-            CaptionsManager captionsManager = new CaptionsManager(jda, groq);
+            CaptionsManager captionsManager = new CaptionsManager(jda, groq, vadMode);
             
             jda.addEventListener(captionsManager);
             
