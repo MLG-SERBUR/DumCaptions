@@ -47,7 +47,8 @@ public class CaptionsConfig {
         "thank you for watching", "please subscribe", "subscribe",
         "subscribe to the channel", "thank you very much", "thanks guys",
         "i'll see you in the next one", "if you'd like to subscribe",
-        "subtitles by the amara.org community", "i'm sorry"
+        "subtitles by the amara.org community", "i'm sorry",
+        "thank you so much for watching", "thank you so much"
     };
 
     // Opus Error handling

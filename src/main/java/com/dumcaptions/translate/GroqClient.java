@@ -144,7 +144,7 @@ public class GroqClient {
         if (result.segments != null) {
             for (GroqSegment seg : result.segments) {
                 // Rule A: High no_speech probability
-                if (seg.noSpeechProb > 0.2) {
+                if (seg.noSpeechProb > 0.26) {
                     logger.info("[{}] no_speech: '{}' | {}", userIdentifier, seg.text, segmentDebug(seg));
                     continue;
                 }
