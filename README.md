@@ -45,7 +45,7 @@ A high-performance Java-based Discord bot that provides real-time voice captions
     Translation settings:
     - `translate_api_key`: API key for the TranslateAPI backend.
     - `mymemory_email`: optional email for the MyMemory backend.
-    - `backend`: default backend for newly enabled channels. Supported values: `TranslateAPI`, `MyMemory`, `Google`.
+    - `backend`: default backend for newly enabled channels. Supported values: `TranslateAPI`, `MyMemory`.
     - `interaction_select_enabled`: show backend dropdown on translated webhook messages by default.
     - `target_channels`: channel IDs to enable for translation on startup.
 
@@ -63,7 +63,7 @@ java --enable-native-access=ALL-UNNAMED -jar target/dum-captions-1.0-SNAPSHOT-sh
 - `/translate` - Show translation status for the current text channel.
 - `/translate enabled:on` - Enable Arabic/Korean text translation in the current channel.
 - `/translate enabled:off` - Disable text translation in the current channel.
-- `/translate backend:Google` - Change backend for an enabled channel.
+- `/translate backend:MyMemory` - Change backend for an enabled channel.
 - `/translate interaction_selection:off` - Hide the backend dropdown on translated messages.
 
 Text translation uses webhooks to mirror the original sender name and avatar. The bot needs `Manage Webhooks`, `Send Messages`, `Use Application Commands`, and `Read Message History` in translated channels.

@@ -86,6 +86,10 @@ public class ChannelStore {
         CompletableFuture.runAsync(this::saveSync);
     }
 
+    public String getDefaultBackend() {
+        return defaults.backend;
+    }
+
     public ChannelSettings get(String channelId) {
         return channels.get(channelId);
     }
@@ -133,9 +137,9 @@ public class ChannelStore {
         }
     }
 
-    public static class ChannelSettings {
+public static class ChannelSettings {
         public boolean enabled = true;
-        public String backend = "TranslateAPI";
+        public String backend = null;
         public boolean interactionSelectEnabled = true;
     }
 
@@ -159,10 +163,10 @@ public class ChannelStore {
         return settings;
     }
 
-    private static ChannelSettings normalizeDefaults(ChannelSettings defaults) {
+private static ChannelSettings normalizeDefaults(ChannelSettings defaults) {
         ChannelSettings settings = defaults != null ? defaults : new ChannelSettings();
         if (settings.backend == null || settings.backend.isBlank()) {
-            settings.backend = "TranslateAPI";
+            settings.backend = "TranslateAPI"; // Safe fallback when all else fails
         }
         settings.enabled = false;
         return settings;

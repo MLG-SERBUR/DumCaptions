@@ -191,7 +191,7 @@ public class TranslationManager extends ListenerAdapter {
         if (backend != null && translators.containsKey(backend)) {
             return backend;
         }
-        return "TranslateAPI";
+        return channelStore.getDefaultBackend();
     }
 
     private ActionRow createBackendSelectMenu(String messageId, String activeBackend) {
