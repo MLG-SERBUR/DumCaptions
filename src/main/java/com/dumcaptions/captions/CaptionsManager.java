@@ -800,17 +800,5 @@ public class CaptionsManager extends ListenerAdapter {
         return trimmed.substring(pos);
     }
 
-    public void registerCommands() {
-        logger.info("Registering /captions command...");
-        jda.upsertCommand(
-            Commands.slash("captions", "Manage real-time translated captions in voice channels")
-                .addSubcommands(
-                    new SubcommandData("on", "Start captions in your current voice channel"),
-                    new SubcommandData("off", "Stop captions and leave the voice channel")
-                )
-        ).queue(
-            success -> logger.info("Successfully registered /captions command"),
-            error -> logger.error("Failed to register /captions command: {}", error.getMessage(), error)
-        );
-    }
+
 }
