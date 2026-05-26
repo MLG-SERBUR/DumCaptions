@@ -77,6 +77,10 @@ public class TranslationManager extends ListenerAdapter {
 
             try {
                 TranslateResponse resp = backend.translate(content, source);
+                if (resp == null || resp.getTranslatedText() == null || resp.getTranslatedText().strip().isEmpty()) {
+                    logger.warn("Translation backend returned empty/null text for channel {}, skipping webhook execution", channelId);
+                    return;
+                }
                 if (!"ar".equals(resp.getSourceLanguage()) && !"ko".equals(resp.getSourceLanguage())) {
                     logger.info("Translation API returned source language {}, skipping webhook", resp.getSourceLanguage());
                     return;
@@ -166,6 +170,10 @@ public class TranslationManager extends ListenerAdapter {
                 Translator backend = translators.get(nextBackend);
                 try {
                     TranslateResponse resp = backend.translate(originalContent, source);
+                    if (resp == null || resp.getTranslatedText() == null || resp.getTranslatedText().strip().isEmpty()) {
+                        logger.warn("Translation backend returned empty/null text for channel {}, skipping hook update", event.getChannel().getId());
+                        return;
+                    }
                     event.getHook().editOriginal(resp.getTranslatedText())
                         .setComponents(createBackendSelectMenu(originalMessageId, nextBackend))
                         .queue();
