@@ -46,6 +46,9 @@ public class Main {
         // Translation config
         public String translate_api_key;
         public String mymemory_email;
+        public String backend;
+        public Boolean interaction_select_enabled;
+        public List<String> target_channels;
     }
 
     public static void main(String[] args) {
@@ -83,12 +86,18 @@ public class Main {
             jda.awaitReady();
 
             // Initialize Translation
-            ChannelStore channelStore = new ChannelStore("channels.json");
             Map<String, Translator> translators = new HashMap<>();
             translators.put("TranslateAPI", new TranslateAPI(config.translate_api_key));
             translators.put("MyMemory", new MyMemory(config.mymemory_email));
             translators.put("Google", new GoogleTranslate());
             List<String> backendOrder = Arrays.asList("TranslateAPI", "MyMemory", "Google");
+            String defaultBackend = translators.containsKey(config.backend) ? config.backend : "TranslateAPI";
+            if (config.backend != null && !config.backend.isBlank() && !translators.containsKey(config.backend)) {
+                logger.warn("Unknown default translation backend {}, falling back to TranslateAPI", config.backend);
+            }
+            ChannelStore.ChannelSettings defaultChannelSettings =
+                    ChannelStore.defaults(defaultBackend, config.interaction_select_enabled);
+            ChannelStore channelStore = new ChannelStore("channels.json", config.target_channels, defaultChannelSettings);
 
             TranslationManager translationManager = new TranslationManager(jda, translators, backendOrder, channelStore);
             jda.addEventListener(translationManager);

@@ -29,13 +29,27 @@ A high-performance Java-based Discord bot that provides real-time voice captions
       "groq_api_key": "YOUR_GROQ_API_KEY",
       "stt_model": "whisper-large-v3",
       "captions_enabled": true,
-      "vad_mode": "adaptive"
+      "vad_mode": "adaptive",
+      "translate_api_key": "YOUR_TRANSLATEAPI_KEY",
+      "mymemory_email": "YOUR_EMAIL@example.com",
+      "backend": "TranslateAPI",
+      "interaction_select_enabled": true,
+      "target_channels": []
     }
     ```
 
     `vad_mode` supports:
     - `ratio`: current strict percentage-based gate
     - `adaptive`: keeps the strict gate, but also rescues sparse speech spread across a longer buffer
+
+    Translation settings:
+    - `translate_api_key`: API key for the TranslateAPI backend.
+    - `mymemory_email`: optional email for the MyMemory backend.
+    - `backend`: default backend for newly enabled channels. Supported values: `TranslateAPI`, `MyMemory`, `Google`.
+    - `interaction_select_enabled`: show backend dropdown on translated webhook messages by default.
+    - `target_channels`: channel IDs to enable for translation on startup.
+
+    Channel settings persist in `channels.json`.
 
 ### Running the Bot
 Since this bot uses native features and the latest Java APIs, you must enable native access:
@@ -46,6 +60,13 @@ java --enable-native-access=ALL-UNNAMED -jar target/dum-captions-1.0-SNAPSHOT-sh
 ### Commands
 - `/captions on` - Start real-time captions in your current voice channel.
 - `/captions off` - Stop captions and leave the voice channel.
+- `/translate` - Show translation status for the current text channel.
+- `/translate enabled:on` - Enable Arabic/Korean text translation in the current channel.
+- `/translate enabled:off` - Disable text translation in the current channel.
+- `/translate backend:Google` - Change backend for an enabled channel.
+- `/translate interaction_selection:off` - Hide the backend dropdown on translated messages.
+
+Text translation uses webhooks to mirror the original sender name and avatar. The bot needs `Manage Webhooks`, `Send Messages`, `Use Application Commands`, and `Read Message History` in translated channels.
 
 ## Development
 

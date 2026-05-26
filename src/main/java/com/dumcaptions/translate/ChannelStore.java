@@ -7,6 +7,7 @@ import org.slf4j.LoggerFactory;
 
 import java.io.File;
 import java.io.IOException;
+import java.util.List;
 import java.util.Map;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ConcurrentHashMap;
@@ -16,12 +17,30 @@ public class ChannelStore {
 
     private final String filePath;
     private final ObjectMapper mapper;
+    private final ChannelSettings defaults;
     private final Map<String, ChannelSettings> channels = new ConcurrentHashMap<>();
 
     public ChannelStore(String filePath) {
+        this(filePath, null, null);
+    }
+
+    public ChannelStore(String filePath, List<String> initialChannels, ChannelSettings defaults) {
         this.filePath = filePath;
         this.mapper = new ObjectMapper();
+        this.defaults = normalizeDefaults(defaults);
         load();
+
+        if (initialChannels != null) {
+            for (String channelId : initialChannels) {
+                if (channelId == null || channelId.isBlank()) continue;
+                ChannelSettings cs = channels.computeIfAbsent(channelId, k -> defaultSettings());
+                cs.enabled = true;
+                if (cs.backend == null || cs.backend.isBlank()) {
+                    cs.backend = this.defaults.backend;
+                }
+            }
+            saveAsync();
+        }
     }
 
     private void load() {
@@ -34,8 +53,8 @@ public class ChannelStore {
                         PersistedSettings ps = entry.getValue();
                         ChannelSettings cs = new ChannelSettings();
                         cs.enabled = ps.enabled != null ? ps.enabled : true;
-                        cs.backend = ps.backend != null ? ps.backend : "TranslateAPI";
-                        cs.interactionSelectEnabled = ps.interactionSelectEnabled != null ? ps.interactionSelectEnabled : true;
+                        cs.backend = ps.backend != null && !ps.backend.isBlank() ? ps.backend : defaults.backend;
+                        cs.interactionSelectEnabled = ps.interactionSelectEnabled != null ? ps.interactionSelectEnabled : defaults.interactionSelectEnabled;
                         channels.put(entry.getKey(), cs);
                     }
                 }
@@ -77,11 +96,13 @@ public class ChannelStore {
     }
 
     public void enable(String channelId, String backend, Boolean interactionSelectEnabled) {
-        ChannelSettings cs = channels.computeIfAbsent(channelId, k -> new ChannelSettings());
+        ChannelSettings cs = channels.computeIfAbsent(channelId, k -> defaultSettings());
         
         cs.enabled = true;
         if (backend != null) {
             cs.backend = backend;
+        } else if (cs.backend == null || cs.backend.isBlank()) {
+            cs.backend = defaults.backend;
         }
         
         if (interactionSelectEnabled != null) {
@@ -116,6 +137,35 @@ public class ChannelStore {
         public boolean enabled = true;
         public String backend = "TranslateAPI";
         public boolean interactionSelectEnabled = true;
+    }
+
+    public static ChannelSettings defaults(String backend, Boolean interactionSelectEnabled) {
+        ChannelSettings settings = new ChannelSettings();
+        settings.enabled = false;
+        if (backend != null && !backend.isBlank()) {
+            settings.backend = backend;
+        }
+        if (interactionSelectEnabled != null) {
+            settings.interactionSelectEnabled = interactionSelectEnabled;
+        }
+        return settings;
+    }
+
+    private ChannelSettings defaultSettings() {
+        ChannelSettings settings = new ChannelSettings();
+        settings.enabled = defaults.enabled;
+        settings.backend = defaults.backend;
+        settings.interactionSelectEnabled = defaults.interactionSelectEnabled;
+        return settings;
+    }
+
+    private static ChannelSettings normalizeDefaults(ChannelSettings defaults) {
+        ChannelSettings settings = defaults != null ? defaults : new ChannelSettings();
+        if (settings.backend == null || settings.backend.isBlank()) {
+            settings.backend = "TranslateAPI";
+        }
+        settings.enabled = false;
+        return settings;
     }
 
     private static class PersistedStore {

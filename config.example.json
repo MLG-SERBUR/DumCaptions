@@ -3,5 +3,10 @@
     "groq_api_key": "YOUR_GROQ_API_KEY",
     "stt_model": "whisper-large-v3",
     "captions_enabled": true,
-    "vad_mode": "adaptive"
+    "vad_mode": "adaptive",
+    "translate_api_key": "YOUR_TRANSLATEAPI_KEY",
+    "mymemory_email": "YOUR_EMAIL@example.com",
+    "backend": "TranslateAPI",
+    "interaction_select_enabled": true,
+    "target_channels": []
 }
