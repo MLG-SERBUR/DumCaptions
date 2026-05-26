@@ -171,8 +171,7 @@ public class TranslationManager extends ListenerAdapter {
                 try {
                     TranslateResponse resp = backend.translate(originalContent, source);
                     if (resp == null || resp.getTranslatedText() == null || resp.getTranslatedText().strip().isEmpty()) {
-                        logger.warn("Translation backend returned empty/null text for channel {}, skipping hook update", event.getChannel().getId());
-                        return;
+                        throw new Exception("Backend returned empty or null translation");
                     }
                     event.getHook().editOriginal(resp.getTranslatedText())
                         .setComponents(createBackendSelectMenu(originalMessageId, nextBackend))
