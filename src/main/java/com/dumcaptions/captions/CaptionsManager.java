@@ -101,10 +101,22 @@ public class CaptionsManager extends ListenerAdapter {
                 return;
             }
             String selected = event.getValues().get(0);
+            
+            if ("off".equals(selected)) {
+                handleOffFromDropdown(event, session);
+                return;
+            }
+            
             session.captionMode = selected;
 
             event.editComponents(ActionRow.of(createSelectionMenu(guildId, selected))).queue();
         }
+    }
+
+    private void handleOffFromDropdown(StringSelectInteractionEvent event, VoiceSession session) {
+        String guildId = event.getGuild().getId();
+        sessions.remove(guildId);
+        cleanupSession(session);
     }
 
     @Override
@@ -168,20 +180,23 @@ public class CaptionsManager extends ListenerAdapter {
             event.reply("Captions are not running.").setEphemeral(true).queue();
             return;
         }
-
-        AudioManager audioManager = event.getGuild().getAudioManager();
+        
+        cleanupSession(session);
+        
+        event.reply("Captions disabled.").queue();
+    }
+    
+    private void cleanupSession(VoiceSession session) {
+        AudioManager audioManager = jda.getGuildById(session.guildId).getAudioManager();
         audioManager.closeAudioConnection();
         
-        // Delete the embed
         MessageChannel channel = jda.getChannelById(MessageChannel.class, session.textChannelId);
         if (channel != null && session.embedMsgId != null) {
             channel.deleteMessageById(session.embedMsgId).queue(
                 null, 
-                err -> logger.warn("Failed to delete captures message: {}", err.getMessage())
+                err -> logger.warn("Failed to delete captions message: {}", err.getMessage())
             );
         }
-
-        event.reply("Captions disabled.").queue();
     }
 
     private class GuildAudioHandler implements AudioReceiveHandler {
@@ -703,7 +718,8 @@ public class CaptionsManager extends ListenerAdapter {
                         SelectOption.of("Transcribe", "transcribe").withDescription("whisper-large-v3-turbo").withDefault("transcribe".equals(selected)),
                         SelectOption.of("English", "english").withDescription("whisper-large-v3, english target").withDefault("english".equals(selected)),
                         SelectOption.of("Korean", "korean").withDescription("whisper-large-v3, korean target").withDefault("korean".equals(selected)),
-                        SelectOption.of("Arabic", "arabic").withDescription("whisper-large-v3, arabic target").withDefault("arabic".equals(selected))
+                        SelectOption.of("Arabic", "arabic").withDescription("whisper-large-v3, arabic target").withDefault("arabic".equals(selected)),
+                        SelectOption.of("Off", "off").withDescription("Disable captions").withDefault("off".equals(selected))
                 )
                 .build();
     }
