@@ -78,9 +78,13 @@ public class CaptionsManager extends ListenerAdapter {
         public final String textChannelId;
         public final Map<Long, AudioBuffer> userAudio = new ConcurrentHashMap<>();
         public final Map<Long, String> lastUserText = new ConcurrentHashMap<>();
+        /** English translations need independent overlap resolution from Spanish captions. */
+        public final Map<Long, String> lastEnglishUserText = new ConcurrentHashMap<>();
         /** End timestamp (ms) of the last transcribed segment per user, for timestamp-driven overlap */
         public final Map<Long, Double> lastUserSegmentEnd = new ConcurrentHashMap<>();
         public final List<String> userLogs = new ArrayList<>();
+        /** Incremented under userLogs lock so stale Discord edits cannot overwrite newer captions. */
+        public volatile long captionVersion;
         public String embedMsgId;
         public String captionMode = "english";
 
@@ -360,38 +364,24 @@ public class CaptionsManager extends ListenerAdapter {
                 // Wrap in OGG
                 byte[] oggData = OggOpusWriter.write(submission.packets);
                 
-                String lastText = submission.session.lastUserText.get(submission.userId);
                 String captionMode = submission.session.captionMode;
+                String lastText = submission.session.lastUserText.get(submission.userId);
                 GroqClient.GroqResult result = groq.translateAudio(oggData, "audio.ogg", lastText, captionMode, submission.displayName, CaptionsConfig.VAD_THRESHOLD);
-                
-                String text = result.text.trim();
-                if (text.isEmpty()) {
-                    logger.info("API empty for {} VAD: {}", submission.displayName, submission.stats.debugReason);
-                    return;
-                }
 
-                // Overlap resolution
-                String previousText = submission.session.lastUserText.get(submission.userId);
-                String displayText = text;
-                String overlapFooter = "";
-                if (previousText != null && !previousText.isEmpty()) {
-                    String overlapResult = resolveOverlap(previousText, text);
-                    if (overlapResult == null) {
-                        logger.info("OVERLAP SKIP {} (contained in last): '{}'", submission.displayName, text);
-                        submission.session.lastUserText.put(submission.userId, previousText);
-                        return;
-                    }
-                    displayText = overlapResult;
-                    if (!displayText.equals(text) && !displayText.trim().isEmpty()) {
-                        overlapFooter = String.format("overlap_trim: '%s'->'%s'", text.trim(), displayText.trim());
-                        logger.info("OVERLAP TRIM {} '{}' -> '{}'", submission.displayName, text, displayText);
-                    }
-                }
+                if ("spanish".equals(captionMode)) {
+                    addGroqCaption(submission, result, submission.session.lastUserText, submission.displayName, true);
 
-                submission.session.lastUserText.put(submission.userId, displayText);
-                submission.session.lastUserSegmentEnd.put(submission.userId, result.lastSegmentEndMs);
-                
-                addCaption(submission.session, submission.displayName, displayText, overlapFooter, submission.userId, submission.overlapMs);
+                    // Keep paired requests sequential so both use global Groq rate limiting.
+                    markRequestSent();
+                    String lastEnglishText = submission.session.lastEnglishUserText.get(submission.userId);
+                    GroqClient.GroqResult englishResult = groq.translateAudio(
+                            oggData, "audio.ogg", lastEnglishText, "english", submission.displayName, CaptionsConfig.VAD_THRESHOLD);
+
+                    addGroqCaption(submission, englishResult, submission.session.lastEnglishUserText,
+                            submission.displayName + " (en)", false);
+                } else {
+                    addGroqCaption(submission, result, submission.session.lastUserText, submission.displayName, true);
+                }
 
             } catch (Exception e) {
                 logger.error("Error in Groq worker for {}: {}", submission.displayName, e.getMessage(), e);
@@ -399,6 +389,39 @@ public class CaptionsManager extends ListenerAdapter {
                 groqProcessingInFlight.set(false);
             }
         });
+    }
+
+    private void addGroqCaption(GroqSubmission submission, GroqClient.GroqResult result,
+                                Map<Long, String> previousTexts, String displayName,
+                                boolean updateSegmentEnd) {
+        String text = result.text.trim();
+        if (text.isEmpty()) {
+            logger.info("API empty for {} VAD: {}", displayName, submission.stats.debugReason);
+            return;
+        }
+
+        String previousText = previousTexts.get(submission.userId);
+        String displayText = text;
+        String overlapFooter = "";
+        if (previousText != null && !previousText.isEmpty()) {
+            String overlapResult = resolveOverlap(previousText, text);
+            if (overlapResult == null) {
+                logger.info("OVERLAP SKIP {} (contained in last): '{}'", displayName, text);
+                return;
+            }
+            displayText = overlapResult;
+            if (!displayText.equals(text) && !displayText.trim().isEmpty()) {
+                overlapFooter = String.format("overlap_trim: '%s'->'%s'", text.trim(), displayText.trim());
+                logger.info("OVERLAP TRIM {} '{}' -> '{}'", displayName, text, displayText);
+            }
+        }
+
+        previousTexts.put(submission.userId, displayText);
+        if (updateSegmentEnd) {
+            submission.session.lastUserSegmentEnd.put(submission.userId, result.lastSegmentEndMs);
+        }
+        addCaption(submission.session, displayName, displayText, overlapFooter,
+                submission.userId, submission.overlapMs);
     }
 
     private void analyzeVadAndQueue(VoiceSession session, long userId, List<BufferedOpusPacket> packets, double overlapMs) {
@@ -661,9 +684,10 @@ public class CaptionsManager extends ListenerAdapter {
             String escapedText = MarkdownSanitizer.escape(text);
             String line = String.format("**%s**: %s", displayName, escapedText);
             session.userLogs.add(line);
-            while (session.userLogs.size() > 10) {
+            while (session.userLogs.size() > 20) {
                 session.userLogs.remove(0);
             }
+            long captionVersion = ++session.captionVersion;
             
             String title = "whisper-large-v3 (English)";
             if ("transcribe".equals(session.captionMode)) title = "whisper-large-v3-turbo (Transcription)";
@@ -682,7 +706,7 @@ public class CaptionsManager extends ListenerAdapter {
             if (channel != null) {
                 channel.getHistoryAfter(session.embedMsgId, 6).queue(history -> {
                     // Check if session still active after async fetch
-                    if (!sessions.containsKey(session.guildId)) return;
+                    if (!sessions.containsKey(session.guildId) || session.captionVersion != captionVersion) return;
 
                     if (history.getRetrievedHistory().size() > 5) {
                         channel.deleteMessageById(session.embedMsgId).queue(null, err -> {});
