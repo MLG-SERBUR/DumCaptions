@@ -349,6 +349,14 @@ public class CaptionsManager extends ListenerAdapter {
         nextReqTime.set(System.currentTimeMillis() + CaptionsConfig.RATE_LIMIT_INTERVAL_MS);
     }
 
+    private void waitForRateLimit() throws InterruptedException {
+        long waitMs = nextReqTime.get() - System.currentTimeMillis();
+        if (waitMs > 0) {
+            Thread.sleep(waitMs);
+        }
+        markRequestSent();
+    }
+
     private void processGroqQueue() {
         if (groqProcessingInFlight.get() || isRateLimited()) return;
         
@@ -372,7 +380,7 @@ public class CaptionsManager extends ListenerAdapter {
                     addGroqCaption(submission, result, submission.session.lastUserText, submission.displayName, true);
 
                     // Keep paired requests sequential so both use global Groq rate limiting.
-                    markRequestSent();
+                    waitForRateLimit();
                     String lastEnglishText = submission.session.lastEnglishUserText.get(submission.userId);
                     GroqClient.GroqResult englishResult = groq.translateAudio(
                             oggData, "audio.ogg", lastEnglishText, "english", submission.displayName, CaptionsConfig.VAD_THRESHOLD);
