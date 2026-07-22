@@ -30,6 +30,13 @@ public class AudioBuffer {
      * @return a ReadyState if this buffer should be processed, null otherwise.
      */
     public synchronized ReadyState getReadiness() {
+        return getReadiness(CaptionModeSettings.forMode(null));
+    }
+
+    /**
+     * Returns readiness using mode-specific buffering thresholds.
+     */
+    public synchronized ReadyState getReadiness(CaptionModeSettings modeSettings) {
         if (packets.isEmpty()) {
             return null;
         }
@@ -39,12 +46,12 @@ public class AudioBuffer {
         long silence = java.time.Duration.between(lastPush, now).toMillis();
 
         // Hard cutoff: buffer has been running too long, process immediately
-        if (duration > CaptionsConfig.HARD_CUTOFF_THRESHOLD_MS) {
+        if (duration > modeSettings.hardCutoffThresholdMs()) {
             return new ReadyState(Priority.HARD_CUTOFF, duration, silence);
         }
 
         // Silence-triggered: natural pause detected, ready to process
-        if (silence > CaptionsConfig.NATURAL_SILENCE_THRESHOLD_MS) {
+        if (silence > modeSettings.naturalSilenceThresholdMs()) {
             return new ReadyState(Priority.SILENCE, duration, silence);
         }
 

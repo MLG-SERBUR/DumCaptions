@@ -249,7 +249,7 @@ public class CaptionsManager extends ListenerAdapter {
             for (Map.Entry<Long, AudioBuffer> entry : session.userAudio.entrySet()) {
                 long userId = entry.getKey();
                 AudioBuffer buf = entry.getValue();
-                AudioBuffer.ReadyState state = buf.getReadiness();
+                AudioBuffer.ReadyState state = buf.getReadiness(CaptionModeSettings.forMode(session.captionMode));
                 if (state == null) continue;
 
                 // Compute shaped priority: base priority + aging bonus
@@ -345,16 +345,8 @@ public class CaptionsManager extends ListenerAdapter {
         return System.currentTimeMillis() < nextReqTime.get();
     }
 
-    private void markRequestSent() {
-        nextReqTime.set(System.currentTimeMillis() + CaptionsConfig.RATE_LIMIT_INTERVAL_MS);
-    }
-
-    private void waitForRateLimit() throws InterruptedException {
-        long waitMs = nextReqTime.get() - System.currentTimeMillis();
-        if (waitMs > 0) {
-            Thread.sleep(waitMs);
-        }
-        markRequestSent();
+    private void markRequestSent(CaptionModeSettings modeSettings) {
+        nextReqTime.set(System.currentTimeMillis() + modeSettings.requestCooldownMs());
     }
 
     private void processGroqQueue() {
@@ -367,7 +359,8 @@ public class CaptionsManager extends ListenerAdapter {
         audioExecutor.submit(() -> {
             try {
                 // Now we are in the rate-limited transcription stage
-                markRequestSent();
+                CaptionModeSettings modeSettings = CaptionModeSettings.forMode(submission.session.captionMode);
+                markRequestSent(modeSettings);
 
                 // Wrap in OGG
                 byte[] oggData = OggOpusWriter.write(submission.packets);
@@ -376,11 +369,11 @@ public class CaptionsManager extends ListenerAdapter {
                 String lastText = submission.session.lastUserText.get(submission.userId);
                 GroqClient.GroqResult result = groq.translateAudio(oggData, "audio.ogg", lastText, captionMode, submission.displayName, CaptionsConfig.VAD_THRESHOLD);
 
-                if ("spanish".equals(captionMode)) {
+                if (modeSettings.includesEnglishTranslation()) {
                     addGroqCaption(submission, result, submission.session.lastUserText, submission.displayName, true);
 
-                    // Keep paired requests sequential so both use global Groq rate limiting.
-                    waitForRateLimit();
+                    // Reset batch cooldown when English request is sent.
+                    markRequestSent(modeSettings);
                     String lastEnglishText = submission.session.lastEnglishUserText.get(submission.userId);
                     GroqClient.GroqResult englishResult = groq.translateAudio(
                             oggData, "audio.ogg", lastEnglishText, "english", submission.displayName, CaptionsConfig.VAD_THRESHOLD);
@@ -634,7 +627,7 @@ public class CaptionsManager extends ListenerAdapter {
             long userId = entry.getKey();
             if (userId == currentUserId) continue;
             AudioBuffer buf = entry.getValue();
-            AudioBuffer.ReadyState state = buf.getReadiness();
+            AudioBuffer.ReadyState state = buf.getReadiness(CaptionModeSettings.forMode(session.captionMode));
             if (state == null) continue;
 
             // Get display name for the queued user

@@ -6,10 +6,6 @@ package com.dumcaptions.captions;
  */
 public class CaptionsConfig {
     
-    // Rate limit between Groq API requests (global)
-    // Keep below Groq's 20 RPM limit; exact 3s spacing can still exceed a rolling window.
-    public static final long RATE_LIMIT_INTERVAL_MS = 3100;
-    
     // Audio processing thresholds
     public static final long NATURAL_SILENCE_THRESHOLD_MS = 1000; // Natural break after 1s silence
     public static final long HARD_CUTOFF_THRESHOLD_MS = 10000;   // Maximum buffer length of 10s

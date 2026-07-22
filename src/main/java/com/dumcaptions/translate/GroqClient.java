@@ -12,7 +12,6 @@ import java.io.IOException;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.concurrent.TimeUnit;
-import java.util.concurrent.atomic.AtomicLong;
 
 public class GroqClient {
     private static final Logger logger = LoggerFactory.getLogger(GroqClient.class);
@@ -20,7 +19,6 @@ public class GroqClient {
     private final String model;
     private final OkHttpClient httpClient;
     private final ObjectMapper objectMapper;
-    private final AtomicLong lastReqTime = new AtomicLong(0);
 
     public GroqClient(String apiKey, String model) {
         this.apiKey = apiKey;
@@ -52,22 +50,6 @@ public class GroqClient {
     }
 
     public GroqResult translateAudio(byte[] audioData, String filename, String prompt, String mode, String userIdentifier, float vadThreshold) throws IOException {
-        // --- RATE LIMITER ---
-        long now = System.currentTimeMillis();
-        long elapsed = now - lastReqTime.get();
-        if (elapsed < CaptionsConfig.RATE_LIMIT_INTERVAL_MS) {
-            long sleepTime = CaptionsConfig.RATE_LIMIT_INTERVAL_MS - elapsed;
-            if (sleepTime > 1000) {
-                logger.info("Rate limit: {}ms", sleepTime);
-            }
-            try {
-                Thread.sleep(sleepTime);
-            } catch (InterruptedException e) {
-                Thread.currentThread().interrupt();
-            }
-        }
-        lastReqTime.set(System.currentTimeMillis());
-
         String targetUrl = "https://api.groq.com/openai/v1/audio/translations";
         String reqModel = this.model;
         String language = null;
