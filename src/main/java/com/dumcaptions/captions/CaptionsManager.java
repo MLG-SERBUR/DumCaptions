@@ -370,6 +370,11 @@ public class CaptionsManager extends ListenerAdapter {
                 GroqClient.GroqResult result = groq.translateAudio(oggData, "audio.ogg", lastText, captionMode, submission.displayName, CaptionsConfig.VAD_THRESHOLD);
 
                 if (modeSettings.includesEnglishTranslation()) {
+                    if (result.text.trim().isEmpty()) {
+                        addGroqCaption(submission, result, submission.session.lastUserText, submission.displayName, true);
+                        return;
+                    }
+
                     addGroqCaption(submission, result, submission.session.lastUserText, submission.displayName, true);
 
                     // Reset batch cooldown when English request is sent.
