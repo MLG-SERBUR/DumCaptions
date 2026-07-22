@@ -86,6 +86,10 @@ public class GroqClient {
             targetUrl = "https://api.groq.com/openai/v1/audio/transcriptions";
             reqModel = "whisper-large-v3";
             language = "ar";
+        } else if ("spanish".equals(mode)) {
+            targetUrl = "https://api.groq.com/openai/v1/audio/transcriptions";
+            reqModel = "whisper-large-v3";
+            language = "es";
         }
 
         // --- MULTIPART REQUEST ---

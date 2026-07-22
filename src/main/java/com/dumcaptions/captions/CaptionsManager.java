@@ -669,6 +669,7 @@ public class CaptionsManager extends ListenerAdapter {
             if ("transcribe".equals(session.captionMode)) title = "whisper-large-v3-turbo (Transcription)";
             else if ("korean".equals(session.captionMode)) title = "whisper-large-v3 (Korean)";
             else if ("arabic".equals(session.captionMode)) title = "whisper-large-v3 (Arabic)";
+            else if ("spanish".equals(session.captionMode)) title = "whisper-large-v3 (Spanish)";
 
             String content = String.join("\n", session.userLogs);
             EmbedBuilder eb = new EmbedBuilder()
@@ -719,6 +720,7 @@ public class CaptionsManager extends ListenerAdapter {
                         SelectOption.of("English", "english").withDescription("whisper-large-v3, english target").withDefault("english".equals(selected)),
                         SelectOption.of("Korean", "korean").withDescription("whisper-large-v3, korean target").withDefault("korean".equals(selected)),
                         SelectOption.of("Arabic", "arabic").withDescription("whisper-large-v3, arabic target").withDefault("arabic".equals(selected)),
+                        SelectOption.of("Spanish", "spanish").withDescription("whisper-large-v3, spanish target").withDefault("spanish".equals(selected)),
                         SelectOption.of("Off", "off").withDescription("Disable captions").withDefault("off".equals(selected))
                 )
                 .build();
