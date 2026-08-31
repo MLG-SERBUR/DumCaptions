@@ -366,8 +366,7 @@ public class CaptionsManager extends ListenerAdapter {
                 byte[] oggData = OggOpusWriter.write(submission.packets);
                 
                 String captionMode = submission.session.captionMode;
-                String lastText = submission.session.lastUserText.get(submission.userId);
-                GroqClient.GroqResult result = groq.translateAudio(oggData, "audio.ogg", lastText, captionMode, submission.displayName, CaptionsConfig.VAD_THRESHOLD);
+                GroqClient.GroqResult result = groq.translateAudio(oggData, "audio.ogg", captionMode, submission.displayName, CaptionsConfig.VAD_THRESHOLD);
 
                 if (modeSettings.includesEnglishTranslation()) {
                     if (result.text.trim().isEmpty()) {
@@ -379,9 +378,8 @@ public class CaptionsManager extends ListenerAdapter {
 
                     // Reset batch cooldown when English request is sent.
                     markRequestSent(modeSettings);
-                    String lastEnglishText = submission.session.lastEnglishUserText.get(submission.userId);
                     GroqClient.GroqResult englishResult = groq.translateAudio(
-                            oggData, "audio.ogg", lastEnglishText, "english", submission.displayName, CaptionsConfig.VAD_THRESHOLD);
+                            oggData, "audio.ogg", "english", submission.displayName, CaptionsConfig.VAD_THRESHOLD);
 
                     addGroqCaption(submission, englishResult, submission.session.lastEnglishUserText,
                             submission.displayName + " (en)", false);

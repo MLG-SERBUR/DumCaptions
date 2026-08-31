@@ -49,7 +49,7 @@ public class GroqClient {
         }
     }
 
-    public GroqResult translateAudio(byte[] audioData, String filename, String prompt, String mode, String userIdentifier, float vadThreshold) throws IOException {
+    public GroqResult translateAudio(byte[] audioData, String filename, String mode, String userIdentifier, float vadThreshold) throws IOException {
         String targetUrl = "https://api.groq.com/openai/v1/audio/translations";
         String reqModel = this.model;
         String language = null;
