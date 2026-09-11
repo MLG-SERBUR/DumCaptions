@@ -74,9 +74,9 @@ public class Main {
             logger.info("Using VAD mode: {}", vadMode.configValue());
 
             JDABuilder builder = JDABuilder.createDefault(config.discord_token)
-                    .enableIntents(GatewayIntent.GUILD_MESSAGES, GatewayIntent.MESSAGE_CONTENT, GatewayIntent.GUILD_VOICE_STATES, GatewayIntent.GUILD_MEMBERS)
-                    .setChunkingFilter(ChunkingFilter.ALL)
-                    .setMemberCachePolicy(MemberCachePolicy.ALL)
+                    .enableIntents(GatewayIntent.GUILD_MESSAGES, GatewayIntent.MESSAGE_CONTENT, GatewayIntent.GUILD_VOICE_STATES)
+                    .setChunkingFilter(ChunkingFilter.NONE)
+                    .setMemberCachePolicy(MemberCachePolicy.VOICE)
                     .setStatus(OnlineStatus.ONLINE)
                     .setActivity(Activity.listening("Voices"))
                     .setAudioModuleConfig(new AudioModuleConfig()

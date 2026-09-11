@@ -63,13 +63,15 @@ After=network.target
 
 [Service]
 WorkingDirectory=$WORK_DIR
+Environment=MALLOC_ARENA_MAX=2
 # Build a new jar every time the service starts
 # Try to pull latest changes first (ignoring failure if offline)
 # ExecStartPre=-$GIT_BIN pull
 # ExecStartPre=$MVN_BIN clean package -DskipTests
-ExecStart=$JAVA_BIN -jar $WORK_DIR/$JAR_FILE
+ExecStart=$JAVA_BIN -Xms32m -Xmx256m -XX:+UseSerialGC -Xss512k -XX:ReservedCodeCacheSize=48m -XX:MaxMetaspaceSize=96m -XX:MaxDirectMemorySize=64m -Xshare:auto -XX:+ExitOnOutOfMemoryError -jar $WORK_DIR/$JAR_FILE
 Restart=always
 RestartSec=10
+MemoryMax=350M
 StandardOutput=journal
 StandardError=journal
 
