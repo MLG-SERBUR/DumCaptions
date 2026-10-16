@@ -2,24 +2,21 @@ package com.dumcaptions.captions;
 
 /** Mode-specific behavior kept outside shared caption pipeline logic. */
 public final class CaptionModeSettings {
-    private static final CaptionModeSettings DEFAULT = new CaptionModeSettings(1000, 10000, 3000, false);
-    private static final CaptionModeSettings SPANISH = new CaptionModeSettings(3000, 20000, 6000, true);
+    private static final CaptionModeSettings DEFAULT = new CaptionModeSettings(1000, 10000, 3000);
 
     private final long naturalSilenceThresholdMs;
     private final long hardCutoffThresholdMs;
     private final long requestCooldownMs;
-    private final boolean includesEnglishTranslation;
 
     private CaptionModeSettings(long naturalSilenceThresholdMs, long hardCutoffThresholdMs,
-                                long requestCooldownMs, boolean includesEnglishTranslation) {
+                                long requestCooldownMs) {
         this.naturalSilenceThresholdMs = naturalSilenceThresholdMs;
         this.hardCutoffThresholdMs = hardCutoffThresholdMs;
         this.requestCooldownMs = requestCooldownMs;
-        this.includesEnglishTranslation = includesEnglishTranslation;
     }
 
     public static CaptionModeSettings forMode(String captionMode) {
-        return "spanish".equals(captionMode) ? SPANISH : DEFAULT;
+        return DEFAULT;
     }
 
     public long naturalSilenceThresholdMs() {
@@ -34,7 +31,16 @@ public final class CaptionModeSettings {
         return requestCooldownMs;
     }
 
-    public boolean includesEnglishTranslation() {
-        return includesEnglishTranslation;
+    /**
+     * Returns copy with longer silence wait.
+     * Used as temporary backpressure when Discord returns 429.
+     * Hard cutoff, Groq cooldown unchanged.
+     */
+    public CaptionModeSettings withIncreasedSilence(long extraMs) {
+        if (extraMs <= 0) return this;
+        return new CaptionModeSettings(
+                naturalSilenceThresholdMs + extraMs,
+                hardCutoffThresholdMs,
+                requestCooldownMs);
     }
 }

@@ -62,6 +62,15 @@ public class CaptionsManager extends ListenerAdapter {
     private static final long AGING_BOOST_MS = 5000;  // Every 5s of waiting, boost priority by 1
     private static final int MAX_CONSECUTIVE_PER_TICK = 1; // Max submissions per buffer per tick (fairness)
 
+    // Discord 429 backpressure: temporarily lengthen silence wait only.
+    // Groq queue, hard cutoff, request cooldown unchanged.
+    // JDA retries rate-limited writes, so captions delayed not lost.
+    private static final long DISCORD_429_STEP_MS = 1000;
+    private static final long DISCORD_429_MAX_EXTRA_MS = 5000;
+    private static final long DISCORD_429_HOLD_MS = 60000;
+    private final AtomicLong discordBackoffExtraMs = new AtomicLong(0);
+    private final AtomicLong discordBackoffUntil = new AtomicLong(0);
+
 
     public CaptionsManager(JDA jda, GroqClient groq, VadMode vadMode) {
         this.jda = jda;
@@ -78,8 +87,6 @@ public class CaptionsManager extends ListenerAdapter {
         public final String textChannelId;
         public final Map<Long, AudioBuffer> userAudio = new ConcurrentHashMap<>();
         public final Map<Long, String> lastUserText = new ConcurrentHashMap<>();
-        /** English translations need independent overlap resolution from Spanish captions. */
-        public final Map<Long, String> lastEnglishUserText = new ConcurrentHashMap<>();
         /** End timestamp (ms) of the last transcribed segment per user, for timestamp-driven overlap */
         public final Map<Long, Double> lastUserSegmentEnd = new ConcurrentHashMap<>();
         public final List<String> userLogs = new ArrayList<>();
@@ -173,7 +180,7 @@ public class CaptionsManager extends ListenerAdapter {
                 .queue(msg -> {
             session.embedMsgId = msg.getId();
             event.getHook().editOriginal("Captions enabled. I've joined " + vc.getName()).queue();
-        });
+        }, err -> handleDiscordFailure(err));
     }
 
     private void handleOff(SlashCommandInteractionEvent event) {
@@ -198,7 +205,10 @@ public class CaptionsManager extends ListenerAdapter {
         if (channel != null && session.embedMsgId != null) {
             channel.deleteMessageById(session.embedMsgId).queue(
                 null, 
-                err -> logger.warn("Failed to delete captions message: {}", err.getMessage())
+                err -> {
+                    handleDiscordFailure(err);
+                    logger.warn("Failed to delete captions message: {}", err.getMessage());
+                }
             );
         }
     }
@@ -249,7 +259,7 @@ public class CaptionsManager extends ListenerAdapter {
             for (Map.Entry<Long, AudioBuffer> entry : session.userAudio.entrySet()) {
                 long userId = entry.getKey();
                 AudioBuffer buf = entry.getValue();
-                AudioBuffer.ReadyState state = buf.getReadiness(CaptionModeSettings.forMode(session.captionMode));
+                AudioBuffer.ReadyState state = buf.getReadiness(effectiveSettings(CaptionModeSettings.forMode(session.captionMode)));
                 if (state == null) continue;
 
                 // Compute shaped priority: base priority + aging bonus
@@ -345,6 +355,39 @@ public class CaptionsManager extends ListenerAdapter {
         return System.currentTimeMillis() < nextReqTime.get();
     }
 
+    private CaptionModeSettings effectiveSettings(CaptionModeSettings base) {
+        long extra = discordBackoffExtraMs.get();
+        if (extra <= 0) return base;
+        if (System.currentTimeMillis() > discordBackoffUntil.get()) {
+            discordBackoffExtraMs.set(0);
+            logger.info("Discord 429 backoff expired, silence wait back to base {}ms", base.naturalSilenceThresholdMs());
+            return base;
+        }
+        return base.withIncreasedSilence(extra);
+    }
+
+    private void handleDiscordFailure(Throwable err) {
+        if (!isRateLimitError(err)) return;
+        long now = System.currentTimeMillis();
+        long extra = Math.min(discordBackoffExtraMs.get() + DISCORD_429_STEP_MS, DISCORD_429_MAX_EXTRA_MS);
+        discordBackoffExtraMs.set(extra);
+        discordBackoffUntil.set(now + DISCORD_429_HOLD_MS);
+        logger.warn("Discord 429 detected, silence wait +{}ms (total extra {}ms) for {}s",
+                DISCORD_429_STEP_MS, extra, DISCORD_429_HOLD_MS / 1000);
+    }
+
+    private static boolean isRateLimitError(Throwable err) {
+        for (Throwable t = err; t != null; t = t.getCause()) {
+            String cls = t.getClass().getName().toLowerCase();
+            if (cls.contains("ratelimit")) return true;
+            String msg = t.getMessage();
+            if (msg == null) continue;
+            String low = msg.toLowerCase();
+            if (low.contains("429") || low.contains("rate limit") || low.contains("ratelimited") || low.contains("too many requests")) return true;
+        }
+        return false;
+    }
+
     private void markRequestSent(CaptionModeSettings modeSettings) {
         nextReqTime.set(System.currentTimeMillis() + modeSettings.requestCooldownMs());
     }
@@ -368,24 +411,7 @@ public class CaptionsManager extends ListenerAdapter {
                 String captionMode = submission.session.captionMode;
                 GroqClient.GroqResult result = groq.translateAudio(oggData, "audio.ogg", captionMode, submission.displayName, CaptionsConfig.VAD_THRESHOLD);
 
-                if (modeSettings.includesEnglishTranslation()) {
-                    if (result.text.trim().isEmpty()) {
-                        addGroqCaption(submission, result, submission.session.lastUserText, submission.displayName, true);
-                        return;
-                    }
-
-                    addGroqCaption(submission, result, submission.session.lastUserText, submission.displayName, true);
-
-                    // Reset batch cooldown when English request is sent.
-                    markRequestSent(modeSettings);
-                    GroqClient.GroqResult englishResult = groq.translateAudio(
-                            oggData, "audio.ogg", "english", submission.displayName, CaptionsConfig.VAD_THRESHOLD);
-
-                    addGroqCaption(submission, englishResult, submission.session.lastEnglishUserText,
-                            submission.displayName + " (en)", false);
-                } else {
-                    addGroqCaption(submission, result, submission.session.lastUserText, submission.displayName, true);
-                }
+                addGroqCaption(submission, result);
 
             } catch (Exception e) {
                 logger.error("Error in Groq worker for {}: {}", submission.displayName, e.getMessage(), e);
@@ -395,9 +421,9 @@ public class CaptionsManager extends ListenerAdapter {
         });
     }
 
-    private void addGroqCaption(GroqSubmission submission, GroqClient.GroqResult result,
-                                Map<Long, String> previousTexts, String displayName,
-                                boolean updateSegmentEnd) {
+    private void addGroqCaption(GroqSubmission submission, GroqClient.GroqResult result) {
+        String displayName = submission.displayName;
+        Map<Long, String> previousTexts = submission.session.lastUserText;
         String text = result.text.trim();
         if (text.isEmpty()) {
             logger.info("API empty for {} VAD: {}", displayName, submission.stats.debugReason);
@@ -421,9 +447,7 @@ public class CaptionsManager extends ListenerAdapter {
         }
 
         previousTexts.put(submission.userId, displayText);
-        if (updateSegmentEnd) {
-            submission.session.lastUserSegmentEnd.put(submission.userId, result.lastSegmentEndMs);
-        }
+        submission.session.lastUserSegmentEnd.put(submission.userId, result.lastSegmentEndMs);
         addCaption(submission.session, displayName, displayText, overlapFooter,
                 submission.userId, submission.overlapMs);
     }
@@ -630,7 +654,7 @@ public class CaptionsManager extends ListenerAdapter {
             long userId = entry.getKey();
             if (userId == currentUserId) continue;
             AudioBuffer buf = entry.getValue();
-            AudioBuffer.ReadyState state = buf.getReadiness(CaptionModeSettings.forMode(session.captionMode));
+            AudioBuffer.ReadyState state = buf.getReadiness(effectiveSettings(CaptionModeSettings.forMode(session.captionMode)));
             if (state == null) continue;
 
             // Get display name for the queued user
@@ -697,7 +721,6 @@ public class CaptionsManager extends ListenerAdapter {
             if ("transcribe".equals(session.captionMode)) title = "whisper-large-v3-turbo (Transcription)";
             else if ("korean".equals(session.captionMode)) title = "whisper-large-v3 (Korean)";
             else if ("arabic".equals(session.captionMode)) title = "whisper-large-v3 (Arabic)";
-            else if ("spanish".equals(session.captionMode)) title = "whisper-large-v3 (Spanish)";
 
             String content = String.join("\n", session.userLogs);
             EmbedBuilder eb = new EmbedBuilder()
@@ -713,7 +736,7 @@ public class CaptionsManager extends ListenerAdapter {
                     if (!sessions.containsKey(session.guildId) || session.captionVersion != captionVersion) return;
 
                     if (history.getRetrievedHistory().size() > 5) {
-                        channel.deleteMessageById(session.embedMsgId).queue(null, err -> {});
+                        channel.deleteMessageById(session.embedMsgId).queue(null, err -> handleDiscordFailure(err));
                         channel.sendMessageEmbeds(eb.build())
                                 .setComponents(ActionRow.of(createSelectionMenu(session.guildId, session.captionMode)))
                                 .setSuppressedNotifications(true)
@@ -721,20 +744,29 @@ public class CaptionsManager extends ListenerAdapter {
                                     msg -> {
                                         // Final check: if user turned off captions while we were resending
                                         if (!sessions.containsKey(session.guildId)) {
-                                            msg.delete().queue(null, err -> {});
+                                            msg.delete().queue(null, err -> handleDiscordFailure(err));
                                             return;
                                         }
                                         session.embedMsgId = msg.getId();
                                     },
-                                    err -> logger.error("Failed to send new captions message for {}: {}", displayName, err.getMessage(), err)
+                                    err -> {
+                                        handleDiscordFailure(err);
+                                        logger.error("Failed to send new captions message for {}: {}", displayName, err.getMessage(), err);
+                                    }
                                 );
                     } else {
                         channel.editMessageEmbedsById(session.embedMsgId, eb.build()).queue(
                             null,
-                            err -> logger.error("Failed to edit captions message for {}: {}", displayName, err.getMessage(), err)
+                            err -> {
+                                handleDiscordFailure(err);
+                                logger.error("Failed to edit captions message for {}: {}", displayName, err.getMessage(), err);
+                            }
                         );
                     }
-                }, err -> logger.error("Failed to fetch message history: {}", err.getMessage(), err));
+                }, err -> {
+                    handleDiscordFailure(err);
+                    logger.error("Failed to fetch message history: {}", err.getMessage(), err);
+                });
             } else {
                 logger.error("Failed to resolve channel ID {} as MessageChannel", session.textChannelId);
             }
@@ -748,7 +780,6 @@ public class CaptionsManager extends ListenerAdapter {
                         SelectOption.of("English", "english").withDescription("whisper-large-v3, english target").withDefault("english".equals(selected)),
                         SelectOption.of("Korean", "korean").withDescription("whisper-large-v3, korean target").withDefault("korean".equals(selected)),
                         SelectOption.of("Arabic", "arabic").withDescription("whisper-large-v3, arabic target").withDefault("arabic".equals(selected)),
-                        SelectOption.of("Spanish", "spanish").withDescription("whisper-large-v3, spanish target").withDefault("spanish".equals(selected)),
                         SelectOption.of("Off", "off").withDescription("Disable captions").withDefault("off".equals(selected))
                 )
                 .build();
