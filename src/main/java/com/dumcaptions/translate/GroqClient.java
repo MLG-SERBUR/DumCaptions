@@ -122,17 +122,23 @@ public class GroqClient {
         List<GroqSegment> validSegments = new ArrayList<>();
         List<String> mergedSegmentsList = new ArrayList<>();
         List<String> blacklistedTexts = new ArrayList<>();
+        int totalSegments = 0;
+        int noSpeechFiltered = 0;
+        int compFiltered = 0;
 
         if (result.segments != null) {
+            totalSegments = result.segments.size();
             for (GroqSegment seg : result.segments) {
                 // Rule A: High no_speech probability
                 if (seg.noSpeechProb > 0.26) {
+                    noSpeechFiltered++;
                     logger.info("[{}] no_speech: '{}' | {}", userIdentifier, seg.text, segmentDebug(seg));
                     continue;
                 }
 
                 // Rule B: High compression ratio (hallucination loops)
                 if (seg.compressionRatio > 2.0) {
+                    compFiltered++;
                     logger.info("[{}] high_comp: '{}' | {}", userIdentifier, seg.text, segmentDebug(seg));
                     continue;
                 }
@@ -206,7 +212,11 @@ public class GroqClient {
 
         // Convert to milliseconds for the caller
         double lastSegmentEndMs = lastSegmentEnd >= 0 ? lastSegmentEnd * 1000 : -1;
-        return new GroqResult(resultText, "", lastSegmentEndMs);
+        // Filter summary doubles as the probe MISS cause breakdown: seg=0 means Groq heard
+        // nothing at all; ns/comp counts show why returned segments were discarded.
+        String filterSummary = String.format("seg=%d ns=%d comp=%d kept=%d",
+                totalSegments, noSpeechFiltered, compFiltered, count);
+        return new GroqResult(resultText, filterSummary, lastSegmentEndMs);
     }
 
     private String filterHallucinations(String text) {

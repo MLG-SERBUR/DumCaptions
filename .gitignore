@@ -27,3 +27,6 @@ config.json
 channels.json
 target/
 .antigravitycli/
+
+# Local-only VAD tuning identity map (real usernames); see docs/vad-tuning.md
+docs/user-mapping.local.md

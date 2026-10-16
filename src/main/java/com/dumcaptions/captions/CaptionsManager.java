@@ -71,6 +71,11 @@ public class CaptionsManager extends ListenerAdapter {
     private final AtomicLong discordBackoffExtraMs = new AtomicLong(0);
     private final AtomicLong discordBackoffUntil = new AtomicLong(0);
 
+    // VAD probe budget: capped near-miss rejects sent to Groq as ground-truth validator.
+    // Key = userId, value = probe send timestamps (ms) inside the current window.
+    private final AtomicLong probeCounter = new AtomicLong(0);
+    private final Map<Long, Deque<Long>> probeTimestamps = new ConcurrentHashMap<>();
+
 
     public CaptionsManager(JDA jda, GroqClient groq, VadMode vadMode) {
         this.jda = jda;
@@ -409,12 +414,12 @@ public class CaptionsManager extends ListenerAdapter {
                 byte[] oggData = OggOpusWriter.write(submission.packets);
                 
                 String captionMode = submission.session.captionMode;
-                GroqClient.GroqResult result = groq.translateAudio(oggData, "audio.ogg", captionMode, submission.displayName, CaptionsConfig.VAD_THRESHOLD);
+                GroqClient.GroqResult result = groq.translateAudio(oggData, "audio.ogg", captionMode, submission.groqName, CaptionsConfig.VAD_THRESHOLD);
 
                 addGroqCaption(submission, result);
 
             } catch (Exception e) {
-                logger.error("Error in Groq worker for {}: {}", submission.displayName, e.getMessage(), e);
+                logger.error("Error in Groq worker for {}: {}", submission.groqName, e.getMessage(), e);
             } finally {
                 groqProcessingInFlight.set(false);
             }
@@ -426,8 +431,15 @@ public class CaptionsManager extends ListenerAdapter {
         Map<Long, String> previousTexts = submission.session.lastUserText;
         String text = result.text.trim();
         if (text.isEmpty()) {
-            logger.info("API empty for {} VAD: {}", displayName, submission.stats.debugReason);
+            if (submission.probe) {
+                logger.info("PROBE RESULT {} MISS (Groq {}) VAD: {}", submission.groqName, result.debugStr, submission.stats.debugReason);
+            } else {
+                logger.info("API empty for {} VAD: {}", displayName, submission.stats.debugReason);
+            }
             return;
+        }
+        if (submission.probe) {
+            logger.info("PROBE RESULT {} HIT '{}' VAD: {}", submission.groqName, text, submission.stats.debugReason);
         }
 
         String previousText = previousTexts.get(submission.userId);
@@ -475,13 +487,27 @@ public class CaptionsManager extends ListenerAdapter {
                 VadStats stats = vadAnalyzer.analyze(batch, overlapMs);
                 
                 if (!stats.isSpeech) {
+                    if (CaptionsConfig.VAD_PROBE_ENABLED && isProbeEligible(stats)) {
+                        long probeId = tryClaimProbe(userId);
+                        if (probeId >= 0) {
+                            String groqName = displayName + " [PROBE#" + probeId + "]";
+                            logger.info("VAD PROBE {}: {}", groqName, stats.debugReason);
+                            groqQueue.offer(new GroqSubmission(session, userId, displayName, groqName,
+                                    batch.validPackets, overlapMs, stats, true, probeId));
+                            return;
+                        }
+                        // Cap hit: one line so the next session can tell whether the probe
+                        // sample was budget-limited (biased toward early-hour rejects) or complete.
+                        logger.info("VAD PROBE SKIP {} (hourly cap): {}", displayName, stats.debugReason);
+                    }
                     logger.info("VAD REJECT {}: {}", displayName, stats.debugReason);
                     return;
                 }
                 
                 // Passed VAD - Queue for Groq transcription
                 logger.info("VAD PASS {}: {}", displayName, stats.debugReason);
-                groqQueue.offer(new GroqSubmission(session, userId, displayName, batch.validPackets, overlapMs, stats));
+                groqQueue.offer(new GroqSubmission(session, userId, displayName, displayName,
+                        batch.validPackets, overlapMs, stats, false, -1));
 
             } catch (Exception e) {
                 logger.error("Error analyzing VAD for user {}: {}", displayName, e.getMessage(), e);
@@ -489,21 +515,58 @@ public class CaptionsManager extends ListenerAdapter {
         });
     }
 
+    /**
+     * Near-miss probe eligibility: rejected buffers worth spending one Groq call on to learn
+     * ground truth. Excludes true silence (tiny peak, weak VAD) so probes target the
+     * soft-speech-vs-noise boundary, not idle mic frames.
+     */
+    private boolean isProbeEligible(VadStats stats) {
+        if (stats.totalFrames < CaptionsConfig.VAD_PROBE_MIN_TOTAL_FRAMES) return false;
+        if (stats.maxAmplitude < CaptionsConfig.VAD_PROBE_MIN_AMPLITUDE) return false;
+        return stats.maxProbability >= CaptionsConfig.VAD_PROBE_MIN_MAX_PROBABILITY
+                || stats.highConfidenceFrames >= 1
+                || stats.speechFrames >= 2;
+    }
+
+    /**
+     * Claims one probe slot for a user under the hourly cap. Returns probe id, or -1 if capped.
+     */
+    private long tryClaimProbe(long userId) {
+        long now = System.currentTimeMillis();
+        Deque<Long> stamps = probeTimestamps.computeIfAbsent(userId, k -> new ArrayDeque<>());
+        synchronized (stamps) {
+            while (!stamps.isEmpty() && now - stamps.peekFirst() > CaptionsConfig.VAD_PROBE_WINDOW_MS) {
+                stamps.pollFirst();
+            }
+            if (stamps.size() >= CaptionsConfig.VAD_PROBE_MAX_PER_USER_PER_HOUR) {
+                return -1;
+            }
+            stamps.addLast(now);
+        }
+        return probeCounter.incrementAndGet();
+    }
+
     private static class GroqSubmission {
         final VoiceSession session;
         final long userId;
         final String displayName;
+        final String groqName;
         final List<BufferedOpusPacket> packets;
         final double overlapMs;
         final VadStats stats;
+        final boolean probe;
+        final long probeId;
 
-        GroqSubmission(VoiceSession session, long userId, String displayName, List<BufferedOpusPacket> packets, double overlapMs, VadStats stats) {
+        GroqSubmission(VoiceSession session, long userId, String displayName, String groqName, List<BufferedOpusPacket> packets, double overlapMs, VadStats stats, boolean probe, long probeId) {
             this.session = session;
             this.userId = userId;
             this.displayName = displayName;
+            this.groqName = groqName;
             this.packets = packets;
             this.overlapMs = overlapMs;
             this.stats = stats;
+            this.probe = probe;
+            this.probeId = probeId;
         }
     }
 

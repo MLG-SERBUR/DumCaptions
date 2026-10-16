@@ -31,6 +31,16 @@ public class CaptionsConfig {
     public static final int ADAPTIVE_SINGLE_FRAME_MIN_TOTAL_FRAMES = 100;
     public static final float ADAPTIVE_SINGLE_FRAME_MIN_MAX_PROBABILITY = 0.56f;
     public static final float ADAPTIVE_SINGLE_FRAME_MIN_AVG_SPEECH_PROBABILITY = 0.56f;
+
+    // VAD probe (data collection): send a capped sample of near-miss rejects to Groq anyway,
+    // using Groq's speech-vs-noise verdict as ground truth for tuning rescue thresholds.
+    // No audio is persisted; only log lines are emitted. Probe captions display normally.
+    public static final boolean VAD_PROBE_ENABLED = true;
+    public static final int VAD_PROBE_MAX_PER_USER_PER_HOUR = 10;
+    public static final long VAD_PROBE_WINDOW_MS = 3600000L;
+    public static final int VAD_PROBE_MIN_TOTAL_FRAMES = 45;
+    public static final int VAD_PROBE_MIN_AMPLITUDE = 500;
+    public static final float VAD_PROBE_MIN_MAX_PROBABILITY = 0.45f;
     
     // Overlap management
     public static final int OVERLAP_PACKETS = 50;               // Fallback: 1 second (50 * 20ms)
